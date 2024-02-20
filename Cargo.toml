@@ -1,0 +1,9 @@
+[package]
+name = "wayland_hwc3"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+android_hardware_common = { path = "android_hardware_common" }
+android_hardware_graphics_common = { path = "android_hardware_graphics_common" }
+android_hardware_graphics_composer = { path = "android_hardware_graphics_composer" }

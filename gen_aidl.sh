@@ -9,7 +9,7 @@ $AOSP_PATH/out/host/linux-x86/bin/aidl \
     -I $AOSP_PATH/hardware/interfaces/graphics/composer/aidl \
     --stability=vintf \
     --structured \
-    -o android_hardware_graphics_composer/src
+    -o android_hardware_graphics_composer3/src
 
 
 $AOSP_PATH/out/host/linux-x86/bin/aidl \

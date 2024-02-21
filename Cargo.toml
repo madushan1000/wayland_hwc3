@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+binder = { package = "binder_ndk", version = "0.2.0" }
 android_hardware_common = { path = "android_hardware_common" }
 android_hardware_graphics_common = { path = "android_hardware_graphics_common" }
-android_hardware_graphics_composer = { path = "android_hardware_graphics_composer" }
+android_hardware_graphics_composer3 = { path = "android_hardware_graphics_composer3" }

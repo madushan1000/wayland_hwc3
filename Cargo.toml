@@ -8,6 +8,9 @@ binder = { package = "binder_ndk", version = "0.2.0" }
 binder_tokio = "0.2.0"
 tokio = { version = "1.25.0", features = ["full"] }
 async-trait = "0.1.74"
+wayrs-client = { version = "1.0.2", features = ["tokio"] }
+wayrs-protocols = { version = "0.13.1", features = ["xdg-shell"] }
+wayrs-utils = { version = "0.14.0", features = ["shm_alloc"]}
 android_hardware_common = { path = "android_hardware_common" }
 android_hardware_graphics_common = { path = "android_hardware_graphics_common" }
 android_hardware_graphics_composer3 = { path = "android_hardware_graphics_composer3" }

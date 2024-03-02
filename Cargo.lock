@@ -223,6 +223,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "gbm-sys"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6fd2d6bf7c0143b38beece05f9a5c4c851a49a8434f62bf58ff28da92b0ddc58"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "gimli"
 version = "0.28.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -280,8 +289,6 @@ checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 [[package]]
 name = "libc"
 version = "0.2.153"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c198f91728a82281a64e1f4f9eeb25d82cb32a5de251c6bd1b5154d63a8e7bd"
 
 [[package]]
 name = "libloading"
@@ -561,8 +568,6 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 [[package]]
 name = "shmemfdrs2"
 version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70a05cf957f811e44f99c629e6d34025429912ffb2333f2960372669e670f54c"
 dependencies = [
  "libc",
 ]
@@ -709,8 +714,10 @@ dependencies = [
  "async-trait",
  "binder_ndk",
  "binder_tokio",
+ "nix",
  "tokio",
  "wayrs-client",
+ "wayrs-egl",
  "wayrs-protocols",
  "wayrs-utils",
 ]
@@ -718,8 +725,6 @@ dependencies = [
 [[package]]
 name = "wayrs-client"
 version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47dafedf9cea6c2a27479d015848a7874cd7eed0d71461b9ace072f2cf4a21a2"
 dependencies = [
  "nix",
  "thiserror",
@@ -728,10 +733,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "wayrs-egl"
+version = "0.5.0"
+dependencies = [
+ "gbm-sys",
+ "libc",
+ "thiserror",
+ "wayrs-client",
+ "wayrs-protocols",
+]
+
+[[package]]
 name = "wayrs-proto-parser"
 version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1406ebeb6ba4a201745a92c221eca3dcec5b404fcbe948acf8a166b323582fa9"
 dependencies = [
  "quick-xml",
  "thiserror",
@@ -740,8 +754,6 @@ dependencies = [
 [[package]]
 name = "wayrs-protocols"
 version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "537e83a10ea2eca491a6f7af040b5c1eabdb66e80ee560da62ce4ddaca73f854"
 dependencies = [
  "wayrs-client",
 ]
@@ -749,8 +761,6 @@ dependencies = [
 [[package]]
 name = "wayrs-scanner"
 version = "0.13.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e387d47549e37bd2a6f03973a77578bb003f661559a096c9274b5b9bcd78bf1f"
 dependencies = [
  "proc-macro-crate",
  "proc-macro2",
@@ -762,14 +772,13 @@ dependencies = [
 [[package]]
 name = "wayrs-utils"
 version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6660838ffb749601dd17b9801206bf124f7f4d02b132316fab893b6486295ae"
 dependencies = [
  "libc",
  "memmap2",
  "shmemfdrs2",
  "thiserror",
  "wayrs-client",
+ "wayrs-protocols",
 ]
 
 [[package]]

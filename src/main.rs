@@ -1,17 +1,17 @@
 use async_trait::async_trait;
 use binder_tokio::*;
-use std::{borrow::Borrow, io, string};
-use tokio::task;
+use std::io;
+use tokio::{io::unix::AsyncFd, task};
 use wayrs_client::{
     self,
     global::GlobalsExt,
-    protocol::{wl_shm, WlCompositor, WlSurface},
-    EventCtx,
+    protocol::{wl_shm, WlCompositor}, IoMode,
 };
-use wayrs_protocols::xdg_shell::{
-    xdg_surface, xdg_toplevel, xdg_wm_base, XdgSurface, XdgToplevel, XdgWmBase,
-};
+use wayrs_protocols::xdg_shell::{xdg_surface, xdg_toplevel, xdg_wm_base, XdgWmBase};
 use wayrs_utils::shm_alloc::{self, ShmAlloc};
+
+mod virtgpu_wayland;
+use virtgpu_wayland::*;
 
 #[allow(non_snake_case)]
 use android_hardware_graphics_composer3::aidl::android::hardware::graphics::composer3::IComposer;
@@ -62,16 +62,17 @@ async fn start_hwc3() {
     });
 }
 
-struct WaylandClientState {
-}
+struct WaylandClientState {}
 
 async fn start_wayland_client() {
     println!("starting wayland client");
 
-    let (mut conn, globals) =
-        wayrs_client::Connection::<WaylandClientState>::async_connect_and_collect_globals()
-            .await
+    let (mut conn, globals)=
+        wayrs_client::Connection::<WaylandClientState>::connect_and_collect_globals()
+        //wayrs_client::Connection::<WaylandClientState, VirtgpuWaylandChannel>::connect_and_collect_globals()
+            //.await
             .expect("can't connect to wayland socket");
+
 
     let wl_compositor: WlCompositor = globals.bind(&mut conn, 1..=5).expect("no compositor api");
 
@@ -114,33 +115,35 @@ async fn start_wayland_client() {
 
     xdg_toplevel.set_app_id(&mut conn, wayrs_client::cstr!("test").into());
     xdg_toplevel.set_title(&mut conn, wayrs_client::cstr!("TEST").into());
-    
+
     for b in shm.1.iter_mut() {
         *b = 255;
     }
-    
+
     wl_surface.attach(&mut conn, Some(shm.0.into_wl_buffer()), 0, 0);
     wl_surface.damage(&mut conn, 0, 0, i32::MAX, i32::MAX);
 
     wl_surface.commit(&mut conn);
 
-    let mut wcstate = WaylandClientState {
-    };
+    let mut wcstate = WaylandClientState {};
 
     loop {
-        conn.async_flush().await.expect("can't flush");
-        conn.async_recv_events().await.expect("can't recv events");
+        conn.flush(IoMode::Blocking).unwrap();
+        conn.recv_events(IoMode::Blocking).unwrap();
         conn.dispatch_events(&mut wcstate)
     }
 }
 
+
 fn xdg_wm_base_cb(ctx: wayrs_client::EventCtx<WaylandClientState, XdgWmBase>) {
+//fn xdg_wm_base_cb(ctx: wayrs_client::EventCtx<WaylandClientState, XdgWmBase, VirtgpuWaylandChannel>,) {
     if let xdg_wm_base::Event::Ping(serial) = ctx.event {
         ctx.proxy.pong(ctx.conn, serial);
     }
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+//#[tokio::main(flavor = "current_thread")]
 async fn main() {
     println!("starting wayland_hwc3 {}", std::process::id());
     //start_hwc3().await;

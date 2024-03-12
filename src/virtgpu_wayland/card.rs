@@ -1,44 +1,47 @@
 use std::{
-    borrow::Borrow,
+    collections::{HashMap, VecDeque},
     ffi::{c_void, OsString},
-    io::{IoSlice, IoSliceMut, Read, Write},
+    io::{self, ErrorKind, IoSlice, IoSliceMut, Read, Write},
     mem::{size_of, size_of_val},
     os::{
-        fd::{AsFd, AsRawFd, BorrowedFd, RawFd},
+        fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd},
         unix::{ffi::OsStringExt, fs::OpenOptionsExt},
     },
-    ptr::{addr_of, null_mut, NonNull},
+    ptr::{addr_of, null_mut},
     slice,
 };
 
 use nix::{
-    ioctl_readwrite,
-    libc::EAGAIN,
-    sys::{
-        mman::{MapFlags, ProtFlags},
-        socket::ControlMessage,
-    },
+    ioctl_readwrite, ioctl_write_buf, ioctl_write_ptr,
+    libc::{EAGAIN, O_CLOEXEC, O_RDWR},
+    sys::mman::{MapFlags, ProtFlags},
 };
+use wayrs_client::IoMode;
 
 use crate::virtgpu_wayland::card::bindings::{
-    CrossDomainHeader, CROSS_DOMAIN_CHANNEL_TYPE_WAYLAND, CROSS_DOMAIN_CMD_READ,
-    CROSS_DOMAIN_CMD_RECEIVE, DRM_COMMAND_BASE, DRM_VIRTGPU_CONTEXT_INIT, DRM_VIRTGPU_EXECBUFFER,
-    DRM_VIRTGPU_MAP, DRM_VIRTGPU_RESOURCE_CREATE_BLOB, DRM_VIRTGPU_RESOURCE_INFO, DRM_VIRTGPU_WAIT,
+    CrossDomainCapabilities, CrossDomainHeader, CrossDomainImageRequirements,
+    CROSS_DOMAIN_CHANNEL_TYPE_WAYLAND, CROSS_DOMAIN_CMD_READ, CROSS_DOMAIN_CMD_RECEIVE,
+    CROSS_DOMAIN_ID_TYPE_WRITE_PIPE, CROSS_DOMAIN_QUERY_RING, DRM_COMMAND_BASE,
+    DRM_VIRTGPU_CONTEXT_INIT, DRM_VIRTGPU_EXECBUFFER, DRM_VIRTGPU_GET_CAPS, DRM_VIRTGPU_MAP,
+    DRM_VIRTGPU_RESOURCE_CREATE_BLOB, DRM_VIRTGPU_RESOURCE_INFO, DRM_VIRTGPU_WAIT,
     VIRTGPU_EVENT_FENCE_SIGNALED,
 };
 
 pub use self::bindings::drm_version;
 use self::bindings::{
-    drm_event, drm_prime_handle, drm_virtgpu_3d_wait, drm_virtgpu_context_init,
-    drm_virtgpu_context_set_param, drm_virtgpu_execbuffer, drm_virtgpu_map,
-    drm_virtgpu_resource_create_blob, drm_virtgpu_resource_info, CrossDomainInit, CrossDomainPoll,
-    CrossDomainSendReceive, CROSS_DOMAIN_CHANNEL_RING, CROSS_DOMAIN_CMD_INIT,
-    CROSS_DOMAIN_CMD_POLL, CROSS_DOMAIN_CMD_SEND, CROSS_DOMAIN_ID_TYPE_VIRTGPU_BLOB,
-    CROSS_DOMAIN_RING_NONE, DRM_IOCTL_BASE, VIRTGPU_BLOB_FLAG_USE_MAPPABLE, VIRTGPU_BLOB_MEM_GUEST,
-    VIRTGPU_CONTEXT_PARAM_CAPSET_ID, VIRTGPU_CONTEXT_PARAM_NUM_RINGS,
-    VIRTGPU_CONTEXT_PARAM_POLL_RINGS_MASK, VIRTGPU_EXECBUF_RING_IDX,
+    drm_event, drm_gem_close, drm_prime_handle, drm_virtgpu_3d_wait, drm_virtgpu_context_init,
+    drm_virtgpu_context_set_param, drm_virtgpu_execbuffer, drm_virtgpu_get_caps, drm_virtgpu_map,
+    drm_virtgpu_resource_create_blob, drm_virtgpu_resource_info, CrossDomainGetImageRequirements,
+    CrossDomainInit, CrossDomainPoll, CrossDomainSendReceive, CROSS_DOMAIN_CHANNEL_RING,
+    CROSS_DOMAIN_CMD_GET_IMAGE_REQUIREMENTS, CROSS_DOMAIN_CMD_INIT, CROSS_DOMAIN_CMD_POLL,
+    CROSS_DOMAIN_CMD_SEND, CROSS_DOMAIN_ID_TYPE_VIRTGPU_BLOB, CROSS_DOMAIN_RING_NONE,
+    DRM_IOCTL_BASE, VIRTGPU_BLOB_FLAG_USE_MAPPABLE, VIRTGPU_BLOB_FLAG_USE_SHAREABLE,
+    VIRTGPU_BLOB_MEM_GUEST, VIRTGPU_BLOB_MEM_HOST3D, VIRTGPU_CONTEXT_PARAM_CAPSET_ID,
+    VIRTGPU_CONTEXT_PARAM_NUM_RINGS, VIRTGPU_CONTEXT_PARAM_POLL_RINGS_MASK,
+    VIRTGPU_EXECBUF_RING_IDX,
 };
 
+#[allow(non_camel_case_types, non_snake_case, unused)]
 mod bindings;
 
 pub const VIRTIO_GPU_CAPSET_VIRGL: u32 = 1;
@@ -54,6 +57,13 @@ ioctl_readwrite!(
     0x2e,
     drm_prime_handle
 );
+ioctl_readwrite!(
+    drm_prime_handle_to_fd,
+    DRM_IOCTL_BASE,
+    0x2d,
+    drm_prime_handle
+);
+ioctl_write_ptr!(drm_gem_close, DRM_IOCTL_BASE, 0x09, drm_gem_close);
 ioctl_readwrite!(
     virtgpu_context_init,
     DRM_IOCTL_BASE,
@@ -94,6 +104,13 @@ ioctl_readwrite!(
     drm_virtgpu_resource_info
 );
 
+ioctl_readwrite!(
+    virtgpu_get_caps,
+    DRM_IOCTL_BASE,
+    DRM_COMMAND_BASE + DRM_VIRTGPU_GET_CAPS,
+    drm_virtgpu_get_caps
+);
+
 trait CrossDomainCmd {
     fn size(&self) -> usize {
         size_of_val(self)
@@ -103,6 +120,7 @@ trait CrossDomainCmd {
 impl CrossDomainCmd for CrossDomainInit {}
 impl CrossDomainCmd for CrossDomainPoll {}
 impl CrossDomainCmd for CrossDomainSendReceive {}
+impl CrossDomainCmd for CrossDomainGetImageRequirements {}
 
 pub struct Card {
     card_fd: std::fs::File,
@@ -110,6 +128,7 @@ pub struct Card {
     channel_ring_handle: u32,
     query_ring_addr: *mut c_void,
     query_ring_handle: u32,
+    image_query_cache: HashMap<(u32, u32, u32), CrossDomainImageRequirements>,
 }
 
 impl Card {
@@ -117,7 +136,7 @@ impl Card {
         let mut options = std::fs::OpenOptions::new();
         options.read(true);
         options.write(true);
-        //options.custom_flags(nix::libc::O_NONBLOCK);
+        options.custom_flags(nix::libc::O_NONBLOCK);
         let file = options.open(path).unwrap();
         //let flags = nix::fcntl::fcntl(file.as_raw_fd(), nix::fcntl::FcntlArg::F_GETFL).unwrap();
         //let flags = nix::fcntl::OFlag::O_RDONLY | nix::fcntl::OFlag::O_NONBLOCK;
@@ -128,6 +147,7 @@ impl Card {
             channel_ring_handle: 0,
             query_ring_addr: null_mut(),
             query_ring_handle: 0,
+            image_query_cache: HashMap::new(),
         }
     }
 
@@ -154,7 +174,75 @@ impl Card {
         OsString::from_vec(unsafe { transmute_vec(name_buf) })
     }
 
+    pub fn fix_metadata(
+        &mut self,
+        plane_idx: usize,
+        width: u32,
+        height: u32,
+        format: u32,
+    ) -> Option<(u32, u32, u64)> {
+        println!("width: {}, height: {}, format: {}", width, height, format);
+        if let Some(val) = self.image_query_cache.get(&(width, height, format)) {
+            return (Some((val.offsets[plane_idx], val.strides[plane_idx], val.modifier)));
+        }
+        let mut cmd_get_reqs: CrossDomainGetImageRequirements = Default::default();
+
+        cmd_get_reqs.hdr.cmd = CROSS_DOMAIN_CMD_GET_IMAGE_REQUIREMENTS as u8;
+        cmd_get_reqs.hdr.cmd_size = size_of::<CrossDomainGetImageRequirements>() as u16;
+
+        cmd_get_reqs.width = width;
+        cmd_get_reqs.height = height;
+        cmd_get_reqs.drm_format = format;
+
+        const GBM_BO_USE_SCANOUT: u32 = (1 << 0);
+        const GBM_BO_USE_LINEAR: u32 = (1 << 4);
+        const RUTABAGA_GRALLOC_USE_TEXTURING: u32 = 1 << 5;
+        const RUTABAGA_GRALLOC_USE_SW_READ_OFTEN: u32 = 1 << 9;
+        const RUTABAGA_GRALLOC_USE_SW_WRITE_OFTEN: u32 = 1 << 11;
+
+        cmd_get_reqs.flags = RUTABAGA_GRALLOC_USE_TEXTURING;
+
+        self.submit_cmd(
+            &cmd_get_reqs,
+            &vec![],
+            CROSS_DOMAIN_QUERY_RING,
+            self.query_ring_handle,
+            true,
+        );
+
+        let response: &CrossDomainImageRequirements = unsafe {
+            (self.query_ring_addr as *const CrossDomainImageRequirements)
+                .as_ref()
+                .unwrap()
+        };
+
+        println!("{:?}", response);
+
+        self.image_query_cache
+            .insert((width, height, format), response.clone());
+
+        //Have to allocate a host blob when image query is done. see
+        //rutabaga_gfx/src/rutabaga_gralloc/minigbm.rs:get_image_memory_requirements()
+        //so just allocate it and discard
+        self.create_host_blob(response.blob_id, response.size, &mut 0);
+
+        Some((
+            response.offsets[plane_idx],
+            response.strides[plane_idx],
+            response.modifier,
+        ))
+    }
+
     pub fn create_context(&mut self) {
+        let mut args: drm_virtgpu_get_caps = Default::default();
+        let mut cross_domain_caps: CrossDomainCapabilities = Default::default();
+        args.cap_set_id = VIRTIO_GPU_CAPSET_CROSS_DOMAIN;
+        args.size = size_of::<CrossDomainCapabilities>() as u32;
+        args.addr = &mut cross_domain_caps as *const _ as u64;
+
+        let _ret = unsafe { virtgpu_get_caps(self.as_fd().as_raw_fd(), &mut args) }.unwrap();
+        println!("{:?}", cross_domain_caps);
+
         let mut init: drm_virtgpu_context_init = Default::default();
         let mut ctx_set_params: [drm_virtgpu_context_set_param; 3] = Default::default();
 
@@ -192,27 +280,33 @@ impl Card {
         self.channel_poll();
     }
 
-    pub fn send(&self, iov: &[std::io::IoSlice<'_>], fds_out: &[RawFd]) -> usize {
+    pub fn send(&self, iov: &[std::io::IoSlice<'_>], fds: &[OwnedFd]) -> usize {
         const DEFAULT_BUFFER_SIZE: usize = 4096;
 
         let mut cmd_send: CrossDomainSendReceive = Default::default();
         cmd_send.hdr.cmd = CROSS_DOMAIN_CMD_SEND as u8;
 
         let opaque_data_size = iov.iter().map(|x| x.len()).sum::<usize>();
+        assert!(
+            opaque_data_size < DEFAULT_BUFFER_SIZE - size_of::<CrossDomainSendReceive>(),
+            "data packet too big"
+        );
         cmd_send.hdr.cmd_size =
             size_of::<CrossDomainSendReceive>() as u16 + opaque_data_size as u16;
 
         cmd_send.opaque_data_size = opaque_data_size as u32;
 
-        for i in 0..fds_out.len() {
+        println!("fds: {:?}", fds);
+
+        for i in 0..fds.len() {
             self.fd_analysis(
-                fds_out[i],
+                &fds[i],
                 &mut cmd_send.identifiers[i],
                 &mut cmd_send.identifier_types[i],
             )
         }
 
-        cmd_send.num_identifiers = fds_out.len() as u32;
+        cmd_send.num_identifiers = fds.len() as u32;
 
         let mut data: Vec<u8> = vec![];
 
@@ -224,14 +318,12 @@ impl Card {
         opaque_data_size
     }
 
-    fn fd_analysis(&self, fd: i32, idx: &mut u32, idx_type: &mut u32) {
+    fn fd_analysis(&self, fd: &OwnedFd, idx: &mut u32, idx_type: &mut u32) {
         let mut gem_handle: drm_prime_handle = Default::default();
 
-        println!("fd: {}, idx: {} idx_type: {}", fd, idx, idx_type);
+        gem_handle.fd = fd.as_raw_fd();
 
-        gem_handle.fd = fd;
-
-        let _ret =
+        let ret =
             unsafe { drm_prime_fd_to_handle(self.as_fd().as_raw_fd(), &mut gem_handle) }.unwrap();
 
         let mut res_info: drm_virtgpu_resource_info = Default::default();
@@ -243,6 +335,15 @@ impl Card {
 
         *idx = res_info.res_handle;
         *idx_type = CROSS_DOMAIN_ID_TYPE_VIRTGPU_BLOB;
+
+        println!(
+            "fd: {}, idx: {} idx_type: {}, gem_handle: {:?}, res_info: {:?}",
+            fd.as_raw_fd(),
+            idx,
+            idx_type,
+            gem_handle,
+            res_info,
+        );
     }
 
     fn channel_poll(&self) {
@@ -257,17 +358,28 @@ impl Card {
     pub fn handle_channel_event(
         &self,
         iov: &mut [std::io::IoSliceMut<'_>],
-        fds_out: &mut Vec<RawFd>,
-    ) -> usize {
+        fds: &mut VecDeque<OwnedFd>,
+        mode: IoMode,
+    ) -> io::Result<usize> {
         let cmd_hdr: &CrossDomainHeader = unsafe {
             (self.channel_ring_addr as *const CrossDomainHeader)
                 .as_ref()
                 .unwrap()
         };
         let mut drm_event_buf = vec![0; size_of::<drm_event>()];
-        let bytes_read =
-            nix::unistd::read(self.as_fd().as_raw_fd(), &mut drm_event_buf[..]).unwrap();
+        let mut bytes_read = 0;
+        loop {
+            let res = nix::unistd::read(self.as_fd().as_raw_fd(), &mut drm_event_buf[..]);
 
+            if Some(nix::errno::Errno::EAGAIN) != res.err() {
+                bytes_read = res.unwrap();
+                print!("{:?}, ", res);
+                break;
+            }
+            if mode == IoMode::NonBlocking {
+                return Err(io::Error::from(ErrorKind::WouldBlock));
+            }
+        }
         assert!(bytes_read == size_of::<drm_event>(), "invalid size");
 
         let (head, body, _tail) = unsafe { drm_event_buf.align_to_mut::<drm_event>() };
@@ -278,31 +390,39 @@ impl Card {
             "invalid event type"
         );
 
-        match cmd_hdr.cmd as u32 {
-            CROSS_DOMAIN_CMD_RECEIVE => return self.handle_receive(iov, fds_out),
+        let ret = match cmd_hdr.cmd as u32 {
+            CROSS_DOMAIN_CMD_RECEIVE => self.handle_receive(iov, fds),
             CROSS_DOMAIN_CMD_READ => self.handle_read(),
             x => panic!("shouldn't get this command {}", x),
-        }
-        todo!()
+        };
+        self.channel_poll();
+        Ok(ret)
     }
 
-    fn handle_receive(&self, iov: &mut [std::io::IoSliceMut<'_>], fds_out: &mut Vec<RawFd>) -> usize {
+    fn handle_receive(
+        &self,
+        iov: &mut [std::io::IoSliceMut<'_>],
+        fds_in: &mut VecDeque<OwnedFd>,
+    ) -> usize {
         let cmd_receive: &CrossDomainSendReceive = unsafe {
             (self.channel_ring_addr as *const CrossDomainSendReceive)
                 .as_ref()
                 .unwrap()
         };
 
-        let mut fds = vec![];
-
         let recv_data_addr = self.channel_ring_addr as usize + size_of::<CrossDomainSendReceive>();
         for i in 0..cmd_receive.num_identifiers as usize {
+            let mut fd = 0;
             self.create_fd(
                 cmd_receive.identifiers[i],
                 cmd_receive.identifier_types[i],
-                cmd_receive.identifier_sizes[i],
-                &fds[i],
+                cmd_receive.identifier_sizes[i].into(),
+                &mut fd,
             );
+            fds_in.push_back(unsafe { OwnedFd::from_raw_fd(fd) });
+            if cmd_receive.identifier_types[i] == CROSS_DOMAIN_ID_TYPE_WRITE_PIPE {
+                todo!()
+            }
         }
 
         let mut opaque_data = unsafe {
@@ -316,13 +436,53 @@ impl Card {
 
         println!("opaque_data: {:?}", opaque_data);
         opaque_data.read_vectored(iov).unwrap();
+
         cmd_receive.opaque_data_size as usize
     }
 
-    fn create_fd(&self, idx: u32, idx_type: u32, idx_size: u32, fd: &u32) {}
+    fn create_fd(&self, idx: u32, idx_type: u32, idx_size: u64, fd: &mut i32) {
+        if idx_type == CROSS_DOMAIN_ID_TYPE_VIRTGPU_BLOB {
+            self.create_host_blob(idx, idx_size, fd);
+        } else {
+            todo!()
+        }
+    }
 
-    fn handle_read(&self) {
+    fn create_host_blob(&self, idx: u32, size: u64, fd: &mut i32) {
+        let mut drm_rc_blob: drm_virtgpu_resource_create_blob = Default::default();
+
+        drm_rc_blob.size = size;
+        drm_rc_blob.blob_mem = VIRTGPU_BLOB_MEM_HOST3D;
+        drm_rc_blob.blob_flags = VIRTGPU_BLOB_FLAG_USE_MAPPABLE | VIRTGPU_BLOB_FLAG_USE_SHAREABLE;
+        drm_rc_blob.blob_id = idx as u64;
+
+        let _ret =
+            unsafe { virtgpu_resource_create_blob(self.as_fd().as_raw_fd(), &mut drm_rc_blob) }
+                .unwrap();
+
+        let mut gem_handle: drm_prime_handle = Default::default();
+
+        gem_handle.handle = drm_rc_blob.bo_handle;
+        gem_handle.flags = O_CLOEXEC as u32 | O_RDWR as u32;
+
+        let _ret =
+            unsafe { drm_prime_handle_to_fd(self.as_fd().as_raw_fd(), &mut gem_handle) }.unwrap();
+
+        *fd = gem_handle.fd;
+
+        self.close_gem_handle(drm_rc_blob.bo_handle);
+    }
+
+    fn handle_read(&self) -> usize {
         todo!()
+    }
+
+    fn close_gem_handle(&self, gem_handle: u32) {
+        let mut gem_close: drm_gem_close = Default::default();
+
+        gem_close.handle = gem_handle;
+
+        let _ret = unsafe { drm_gem_close(self.as_fd().as_raw_fd(), &gem_close) }.unwrap();
     }
 
     fn submit_cmd(
@@ -330,7 +490,7 @@ impl Card {
         cmd: &impl CrossDomainCmd,
         data: &[u8],
         ring_idx: u32,
-        ring_handle: u64,
+        ring_handle: u32,
         wait: bool,
     ) {
         let mut wait_3d: drm_virtgpu_3d_wait = Default::default();
@@ -352,7 +512,7 @@ impl Card {
         }
 
         if ring_handle != 0 {
-            exec.bo_handles = ring_handle;
+            exec.bo_handles = &ring_handle as *const _ as u64;
             exec.num_bo_handles = 1;
         }
 
@@ -362,7 +522,9 @@ impl Card {
             let mut ret = -EAGAIN;
             while ret == -EAGAIN {
                 wait_3d.handle = ring_handle as u32;
+                println!("waiting {:?}", wait_3d);
                 ret = unsafe { virtgpu_wait(self.as_fd().as_raw_fd(), &mut wait_3d) }.unwrap();
+                println!("waiting {:?}", wait_3d);
             }
         }
     }
@@ -418,4 +580,3 @@ pub unsafe fn transmute_vec<T, U>(from: Vec<T>) -> Vec<U> {
 unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
     ::core::slice::from_raw_parts((p as *const T) as *const u8, ::core::mem::size_of::<T>())
 }
-

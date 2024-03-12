@@ -1,15 +1,13 @@
 use std::{
-    io::{IoSlice, IoSliceMut},
-    os::fd::{AsFd, AsRawFd, RawFd},
-};
-
-use nix::sys::socket::{ControlMessage, MsgFlags, RecvMsg, SockaddrLike};
-use wayrs_client::{
-    ArrayBuffer, RingBuffer, WaylandSocket, BYTES_IN_LEN, BYTES_OUT_LEN, FDS_IN_LEN, FDS_OUT_LEN,
+    collections::VecDeque,
+    io::{self, IoSlice, IoSliceMut},
+    os::fd::{AsFd, AsRawFd, OwnedFd, RawFd},
 };
 
 use card::Card;
+use wayrs_client::{ClientTransport, IoMode, Transport};
 
+#[allow(non_camel_case_types, non_snake_case, unused, non_upper_case_globals)]
 mod card;
 
 pub struct VirtgpuWaylandChannel {
@@ -22,7 +20,7 @@ impl AsRawFd for VirtgpuWaylandChannel {
     }
 }
 
-impl WaylandSocket for VirtgpuWaylandChannel {
+impl ClientTransport for VirtgpuWaylandChannel {
     fn connect() -> Result<Self, wayrs_client::ConnectError>
     where
         Self: Sized,
@@ -37,32 +35,26 @@ impl WaylandSocket for VirtgpuWaylandChannel {
         Ok(Self { card })
     }
 
-    fn sendmsg(
-        &self,
-        bytes_out: &mut RingBuffer<BYTES_OUT_LEN>,
-        fds: &[RawFd],
-        _flags: MsgFlags,
-    ) -> nix::Result<usize> {
+    fn fix_metadata(&mut self, plane_idx: usize,width: u32, height: u32, format: u32) -> Option<(u32, u32, u64)> {
+        self.card.fix_metadata(plane_idx, width, height, format)
+    }
+}
+
+impl Transport for VirtgpuWaylandChannel {
+    fn send(&mut self, bytes: &[IoSlice], fds: &[OwnedFd], _mode: IoMode) -> io::Result<usize> {
         println!("sendmsg");
-        let mut iov_buf = [IoSlice::new(&[]), IoSlice::new(&[])];
-        let iov = bytes_out.get_readable_iov(&mut iov_buf);
-        Ok(self.card.send(iov, fds))
+        Ok(self.card.send(bytes, fds))
     }
 
-    fn recvmsg(
-        &self,
-        bytes_in: &mut RingBuffer<BYTES_IN_LEN>,
-        fds_in: &mut ArrayBuffer<RawFd, FDS_IN_LEN>,
-        _flags: MsgFlags,
-    ) -> nix::Result<usize> {
-        let mut iov_buf = [IoSliceMut::new(&mut []), IoSliceMut::new(&mut [])];
-        let iov = bytes_in.get_writeable_iov(&mut iov_buf);
-        let mut cmsgs = vec![];
-        //let msg = socket::recvmsg::<()>(self.as_raw_fd(), iov, Some(&mut cmsg), flags)?;
-        let recv = self.card.handle_channel_event(iov, &mut cmsgs);
+    fn recv(
+        &mut self,
+        bytes: &mut [IoSliceMut],
+        fds: &mut VecDeque<OwnedFd>,
+        mode: IoMode,
+    ) -> io::Result<usize> {
+        println!("recvmsg {:?}", mode);
+        let recv = self.card.handle_channel_event(bytes, fds, mode);
 
-        fds_in.extend(&cmsgs);
-
-        Ok(recv)
+        Ok(recv?)
     }
 }

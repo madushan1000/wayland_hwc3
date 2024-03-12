@@ -1,19 +1,42 @@
 use async_trait::async_trait;
 use binder_tokio::*;
-use std::io;
-use tokio::{io::unix::AsyncFd, task};
+use gles31::{
+    glAttachShader, glBindBuffer, glBindFramebuffer, glBindRenderbuffer, glBindVertexArray,
+    glBufferData, glCheckFramebufferStatus, glClear, glClearColor, glCompileShader,
+    glCreateProgram, glCreateShader, glDeleteShader, glDrawArrays, glDrawBuffers,
+    glEnableVertexAttribArray, glFinish, glFramebufferRenderbuffer, glGenBuffers,
+    glGenFramebuffers, glGenRenderbuffers, glGenVertexArrays, glGetIntegerv, glGetProgramInfoLog,
+    glGetProgramiv, glGetShaderInfoLog, glGetShaderiv, glGetUniformLocation, glLinkProgram,
+    glShaderSource, glUniform1f, glUniform2f, glUseProgram, glVertexAttribPointer, glViewport,
+    load_gl_functions, GL_ARRAY_BUFFER, GL_COLOR_ATTACHMENT0, GL_COLOR_BUFFER_BIT,
+    GL_COMPILE_STATUS, GL_FLOAT, GL_FRAGMENT_SHADER, GL_FRAMEBUFFER, GL_FRAMEBUFFER_COMPLETE,
+    GL_LINK_STATUS, GL_MAJOR_VERSION, GL_MINOR_VERSION, GL_RENDERBUFFER, GL_STATIC_DRAW,
+    GL_TRIANGLES, GL_VERTEX_SHADER,
+};
+use std::{collections::HashMap, io};
+use tokio::task;
 use wayrs_client::{
     self,
     global::GlobalsExt,
-    protocol::{wl_shm, WlCompositor}, IoMode,
+    protocol::{wl_callback, wl_output, WlCallback, WlCompositor, WlSurface},
+    Connection, EventCtx, IoMode,
 };
-use wayrs_protocols::xdg_shell::{xdg_surface, xdg_toplevel, xdg_wm_base, XdgWmBase};
-use wayrs_utils::shm_alloc::{self, ShmAlloc};
+use wayrs_egl::{
+    egl_ffi, Buffer, BufferPool, DrmDevice, EglContext, EglContextBuilder, EglDisplay, Fourcc,
+    GraphicsApi,
+};
+use wayrs_protocols::{
+    linux_dmabuf_unstable_v1::{
+        zwp_linux_dmabuf_feedback_v1, ZwpLinuxDmabufFeedbackV1, ZwpLinuxDmabufV1,
+    },
+    xdg_shell::{xdg_surface, xdg_toplevel, xdg_wm_base, XdgSurface, XdgToplevel, XdgWmBase},
+};
+use wayrs_utils::dmabuf_feedback::{DmabufFeedback, DmabufFeedbackHandler};
 
 mod virtgpu_wayland;
 use virtgpu_wayland::*;
 
-#[allow(non_snake_case)]
+#[allow(non_camel_case_types, non_snake_case, unused_imports)]
 use android_hardware_graphics_composer3::aidl::android::hardware::graphics::composer3::IComposer;
 use android_hardware_graphics_composer3::aidl::android::hardware::graphics::composer3::{
     Capability,
@@ -39,6 +62,14 @@ impl IComposerAsyncServer for WaylandHwc3Service {
     }
 }
 
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+//#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    println!("starting wayland_hwc3 {}", std::process::id());
+    //start_hwc3().await;
+    start_wayland_client().await;
+}
+
 const SERVICE_IDENTIFIER: &str = "android.hardware.graphics.composer3.IComposer/default";
 
 async fn start_hwc3() {
@@ -62,90 +93,460 @@ async fn start_hwc3() {
     });
 }
 
-struct WaylandClientState {}
+type WaylandChannel = VirtgpuWaylandChannel;
 
 async fn start_wayland_client() {
     println!("starting wayland client");
-
-    let (mut conn, globals)=
-        wayrs_client::Connection::<WaylandClientState>::connect_and_collect_globals()
-        //wayrs_client::Connection::<WaylandClientState, VirtgpuWaylandChannel>::connect_and_collect_globals()
-            //.await
-            .expect("can't connect to wayland socket");
-
-
-    let wl_compositor: WlCompositor = globals.bind(&mut conn, 1..=5).expect("no compositor api");
-
-    let mut shm_alloc = ShmAlloc::bind(&mut conn, &globals).expect("ShmAlloc error");
-
-    let shm = shm_alloc
-        .alloc_buffer(
-            &mut conn,
-            shm_alloc::BufferSpec {
-                width: 100,
-                height: 200,
-                stride: 100 * 4,
-                format: wl_shm::Format::Argb8888,
-            },
-        )
-        .expect("can't allocate shm");
+    let (mut conn, globals) = Connection::<State,WaylandChannel>::connect_and_collect_globals().unwrap();
+    let linux_dmabuf: ZwpLinuxDmabufV1 = globals.bind(&mut conn, 4).unwrap();
+    let wl_compositor: WlCompositor = globals.bind(&mut conn, ..=6).unwrap();
     let xdg_wm_base: XdgWmBase = globals
         .bind_with_cb(&mut conn, ..=4, xdg_wm_base_cb)
         .unwrap();
 
-    let wl_surface = wl_compositor.create_surface(&mut conn);
-    let xdg_surface = xdg_wm_base.get_xdg_surface(&mut conn, wl_surface);
-    let xdg_toplevel = xdg_surface.get_toplevel(&mut conn);
+    let mut state = State {
+        time: 0.0,
+        time_anchor: None,
+        surf: Surface::new(&mut conn, wl_compositor, xdg_wm_base, linux_dmabuf),
+        linux_dmabuf,
+        gl: None,
+    };
 
-    conn.set_callback_for(xdg_surface, |ctx| {
-        if let xdg_surface::Event::Configure(serial) = ctx.event {
-            ctx.proxy.ack_configure(ctx.conn, serial);
-        }
-    });
-
-    conn.set_callback_for(xdg_toplevel, |ctx| match ctx.event {
-        xdg_toplevel::Event::Configure(args) => {
-            //todo
-        }
-        xdg_toplevel::Event::Close => {
-            ctx.conn.break_dispatch_loop();
-        }
-        _ => (),
-    });
-
-    xdg_toplevel.set_app_id(&mut conn, wayrs_client::cstr!("test").into());
-    xdg_toplevel.set_title(&mut conn, wayrs_client::cstr!("TEST").into());
-
-    for b in shm.1.iter_mut() {
-        *b = 255;
-    }
-
-    wl_surface.attach(&mut conn, Some(shm.0.into_wl_buffer()), 0, 0);
-    wl_surface.damage(&mut conn, 0, 0, i32::MAX, i32::MAX);
-
-    wl_surface.commit(&mut conn);
-
-    let mut wcstate = WaylandClientState {};
-
-    loop {
+    while !state.surf.should_close {
         conn.flush(IoMode::Blocking).unwrap();
+        println!("flusing");
         conn.recv_events(IoMode::Blocking).unwrap();
-        conn.dispatch_events(&mut wcstate)
+        println!("recv_events");
+        conn.dispatch_events(&mut state);
+        println!("disptach_events");
     }
 }
 
+// Two buffers is not enough for smooth resizing, at least on my system. Three seems to be enough.
+const BUFFERS: usize = 3;
 
-fn xdg_wm_base_cb(ctx: wayrs_client::EventCtx<WaylandClientState, XdgWmBase>) {
-//fn xdg_wm_base_cb(ctx: wayrs_client::EventCtx<WaylandClientState, XdgWmBase, VirtgpuWaylandChannel>,) {
+struct Renderer {
+    buffers: BufferPool<BUFFERS>,
+    rbo: u32,
+    screensize_loc: i32,
+    time_loc: i32,
+
+    #[allow(dead_code)]
+    egl_context: EglContext,
+    egl_display: EglDisplay,
+}
+
+impl Renderer {
+    pub fn new(egl_display: EglDisplay, format: Fourcc, modifiers: Vec<u64>) -> Self {
+        println!(
+            "EGL v{}.{}",
+            egl_display.major_version(),
+            egl_display.minor_version()
+        );
+
+        let egl_context = EglContextBuilder::new(GraphicsApi::OpenGlEs)
+            .version(3, 1)
+            .build(&egl_display)
+            .unwrap();
+
+        egl_context.make_current().unwrap();
+
+        unsafe { load_gl_functions(&|name| egl_ffi::eglGetProcAddress(name as *const _)).unwrap() };
+
+        let shader_prog;
+        let mut vbo = 0;
+        let mut vao = 0;
+        let screensize_loc;
+        let time_loc;
+        let mut fb = 0;
+        let mut rbo = 0;
+
+        unsafe {
+            {
+                let mut major = 0;
+                let mut minor = 0;
+                glGetIntegerv(GL_MAJOR_VERSION, &mut major);
+                glGetIntegerv(GL_MINOR_VERSION, &mut minor);
+                println!("OpenGL-ES v{major}.{minor}");
+            }
+
+            glGenFramebuffers(1, &mut fb);
+            glGenRenderbuffers(1, &mut rbo);
+
+            glBindFramebuffer(GL_FRAMEBUFFER, fb);
+            glBindRenderbuffer(GL_RENDERBUFFER, rbo);
+            glDrawBuffers(1, &GL_COLOR_ATTACHMENT0);
+
+            let vertex_shader = b"
+#version 310 es
+precision mediump float;
+in vec3 vp;
+uniform vec2 screensize;
+uniform float t;
+void main() {
+    float ratio = screensize.x / screensize.y;
+    gl_Position = vec4(vp, 1.0);
+    if (ratio > 1.0)
+        gl_Position.x /= ratio;
+    else
+        gl_Position.y *= ratio;
+    gl_Position.x *= 0.8 + sin(t) * 0.2;
+    gl_Position.y *= 0.8 + sin(t) * 0.2;
+}\0";
+
+            let fragment_shader = b"
+#version 310 es
+precision mediump float;
+out vec4 frag_color;
+uniform vec2 screensize;
+uniform float t;
+void main() {
+    vec2 uv = gl_FragCoord.xy / screensize * 2.0 - 1.0;
+    float ratio = screensize.x / screensize.y;
+    if (ratio > 1.0)
+        uv.x *= ratio;
+    else
+        uv.y /= ratio;
+    vec3 col = 0.5 + 0.5*cos(t*1.2 + 2.0*uv.xyx+vec3(0.0,3.0,4.0));
+    frag_color = vec4(col, 1.0);
+}\0";
+
+            let vs = glCreateShader(GL_VERTEX_SHADER);
+            glShaderSource(vs, 1, &(vertex_shader.as_ptr() as _), std::ptr::null());
+            glCompileShader(vs);
+            assert_shader_ok(vs);
+
+            let fs = glCreateShader(GL_FRAGMENT_SHADER);
+            glShaderSource(fs, 1, &(fragment_shader.as_ptr() as _), std::ptr::null());
+            glCompileShader(fs);
+            assert_shader_ok(fs);
+
+            shader_prog = glCreateProgram();
+            glAttachShader(shader_prog, fs);
+            glAttachShader(shader_prog, vs);
+            glLinkProgram(shader_prog);
+            assert_shader_program_ok(shader_prog);
+
+            glUseProgram(shader_prog);
+
+            screensize_loc = glGetUniformLocation(shader_prog, b"screensize\0".as_ptr().cast());
+            time_loc = glGetUniformLocation(shader_prog, b"t\0".as_ptr().cast());
+
+            glDeleteShader(vs);
+            glDeleteShader(fs);
+
+            glGenBuffers(1, &mut vbo);
+            glBindBuffer(GL_ARRAY_BUFFER, vbo);
+            use std::f32::consts::FRAC_PI_3;
+            let points: [f32; 9] = [
+                f32::sin(0.0),
+                f32::cos(0.0),
+                0.0,
+                f32::sin(FRAC_PI_3 * -2.0),
+                f32::cos(FRAC_PI_3 * -2.0),
+                0.0,
+                f32::sin(FRAC_PI_3 * -4.0),
+                f32::cos(FRAC_PI_3 * -4.0),
+                0.0,
+            ];
+            glBufferData(
+                GL_ARRAY_BUFFER,
+                std::mem::size_of_val(&points) as _,
+                points.as_ptr() as *const _,
+                GL_STATIC_DRAW,
+            );
+
+            glGenVertexArrays(1, &mut vao);
+            glBindVertexArray(vao);
+            glEnableVertexAttribArray(0);
+            glBindBuffer(GL_ARRAY_BUFFER, vbo);
+            glVertexAttribPointer(0, 3, GL_FLOAT, 0, 0, std::ptr::null());
+        }
+
+        Self {
+            buffers: BufferPool::new(format, modifiers),
+            rbo,
+            screensize_loc,
+            time_loc,
+
+            egl_context,
+            egl_display,
+        }
+    }
+
+    pub fn render(
+        &mut self,
+        conn: &mut Connection<State, WaylandChannel>,
+        width: u32,
+        height: u32,
+        time: f32,
+    ) -> Option<&Buffer> {
+        let buf = self
+            .buffers
+            .get_buffer(&self.egl_display, conn, width, height)
+            .unwrap()?;
+
+        unsafe {
+            glUniform2f(self.screensize_loc, width as f32, height as f32);
+            glUniform1f(self.time_loc, time);
+
+            buf.set_as_gl_renderbuffer_storage();
+            glFramebufferRenderbuffer(
+                GL_FRAMEBUFFER,
+                GL_COLOR_ATTACHMENT0,
+                GL_RENDERBUFFER,
+                self.rbo,
+            );
+
+            assert_eq!(
+                glCheckFramebufferStatus(GL_FRAMEBUFFER),
+                GL_FRAMEBUFFER_COMPLETE,
+                "framebuffer incomplete"
+            );
+
+            glViewport(0, 0, width as _, height as _);
+            glClearColor(0.0, 0.0, 0.0, 0.6);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glDrawArrays(GL_TRIANGLES, 0, 3);
+
+            glFinish();
+        };
+
+        Some(buf)
+    }
+}
+
+struct State {
+    time: f32,
+    time_anchor: Option<u32>,
+    surf: Surface,
+    linux_dmabuf: ZwpLinuxDmabufV1,
+    gl: Option<Renderer>,
+}
+
+impl State {
+    fn render(&mut self, conn: &mut Connection<State, WaylandChannel>, time: Option<u32>) {
+        if !self.surf.mapped || self.surf.frame_cb.is_some() {
+            return;
+        }
+        let Some(gl) = &mut self.gl else { return };
+
+        if let Some(time) = time {
+            let time_anchor = *self.time_anchor.get_or_insert(time);
+            self.time = (time - time_anchor) as f32 / 700.0;
+        }
+
+        if let Some(buf) = gl.render(conn, self.surf.width, self.surf.height, self.time) {
+            let wl_buffer = unsafe { buf.wl_buffer() };
+            self.surf.wl.attach(conn, Some(wl_buffer), 0, 0);
+            self.surf.wl.damage(conn, 0, 0, i32::MAX, i32::MAX);
+        } else {
+            eprintln!("skipping frame (not enough buffers)");
+        }
+
+        self.surf.frame_cb = Some(self.surf.wl.frame_with_cb(conn, |ctx| {
+            let wl_callback::Event::Done(time) = ctx.event;
+            assert_eq!(ctx.state.surf.frame_cb, Some(ctx.proxy));
+            ctx.state.surf.frame_cb = None;
+            ctx.state.render(ctx.conn, Some(time));
+        }));
+
+        self.surf.wl.commit(conn);
+    }
+}
+
+struct Surface {
+    wl: WlSurface,
+    #[allow(dead_code)]
+    xdg_surface: XdgSurface,
+    #[allow(dead_code)]
+    xdg_toplevel: XdgToplevel,
+    dmabuf_feedback: DmabufFeedback,
+    width: u32,
+    height: u32,
+    frame_cb: Option<WlCallback>,
+    mapped: bool,
+    should_close: bool,
+}
+
+impl Surface {
+    fn new(
+        conn: &mut Connection<State, WaylandChannel>,
+        wl_compositor: WlCompositor,
+        xdg_wm_base: XdgWmBase,
+        linux_dmabuf: ZwpLinuxDmabufV1,
+    ) -> Self {
+        let wl = wl_compositor.create_surface(conn);
+        let dmabuf_feedback = DmabufFeedback::get_for_surface(conn, linux_dmabuf, wl);
+        let xdg_surface = xdg_wm_base.get_xdg_surface(conn, wl);
+        let xdg_toplevel = xdg_surface.get_toplevel(conn);
+
+        // DMABUFs have origin at top-left corner, but OpenGL has origin at bottom-left. This
+        // results in a y-flipped image.
+        wl.set_buffer_transform(conn, wl_output::Transform::Flipped180);
+
+        conn.set_callback_for(xdg_surface, |ctx| {
+            if let xdg_surface::Event::Configure(serial) = ctx.event {
+                println!("at configure");
+                ctx.proxy.ack_configure(ctx.conn, serial);
+                ctx.state.surf.mapped = true;
+                ctx.state.render(ctx.conn, None);
+            }
+        });
+
+        conn.set_callback_for(xdg_toplevel, |ctx| match ctx.event {
+            xdg_toplevel::Event::Configure(args) => {
+                if args.width != 0 {
+                    ctx.state.surf.width = args.width.try_into().unwrap();
+                }
+                if args.height != 0 {
+                    ctx.state.surf.height = args.height.try_into().unwrap();
+                }
+            }
+            xdg_toplevel::Event::Close => {
+                ctx.state.surf.should_close = true;
+                ctx.conn.break_dispatch_loop();
+            }
+            _ => (),
+        });
+
+        xdg_toplevel.set_app_id(conn, wayrs_client::cstr!("wayrs-egl").into());
+        xdg_toplevel.set_title(conn, wayrs_client::cstr!("TITLE").into());
+
+        wl.commit(conn);
+
+        Self {
+            wl,
+            xdg_surface,
+            xdg_toplevel,
+            dmabuf_feedback,
+            width: 500,
+            height: 500,
+            frame_cb: None,
+            mapped: false,
+            should_close: false,
+        }
+    }
+}
+
+impl DmabufFeedbackHandler<WaylandChannel> for State {
+    fn get_dmabuf_feedback(&mut self, wl: ZwpLinuxDmabufFeedbackV1) -> &mut DmabufFeedback {
+        assert_eq!(wl, self.surf.dmabuf_feedback.wl());
+        &mut self.surf.dmabuf_feedback
+    }
+
+    fn feedback_done(&mut self, _: &mut Connection<Self, WaylandChannel>, wl: ZwpLinuxDmabufFeedbackV1) {
+        assert_eq!(wl, self.surf.dmabuf_feedback.wl());
+
+        if self.gl.is_some() {
+            eprintln!("only initial dmabuf feedback is implemented");
+            return;
+        }
+
+        let main_dev = self
+            .surf
+            .dmabuf_feedback
+            .main_device()
+            .expect("dmabuf_feedback: main_device not advertised");
+
+        let drm_device =
+            DrmDevice::new_from_id(main_dev).expect("could not create drm_device from id");
+
+        let render_node = drm_device
+            .render_node()
+            .expect("drm_device does not have a render node");
+        eprintln!("DRM render node: {}", render_node.to_string_lossy());
+
+        let egl_display = EglDisplay::new(self.linux_dmabuf, render_node).unwrap();
+
+        let format_table = self.surf.dmabuf_feedback.format_table();
+        let mut formats = HashMap::<Fourcc, Vec<u64>>::new();
+
+        for tranche in self.surf.dmabuf_feedback.tranches() {
+            if tranche
+                .flags
+                .contains(zwp_linux_dmabuf_feedback_v1::TrancheFlags::Scanout)
+            {
+                eprintln!("Ignoring scanout tranche");
+                continue;
+            }
+            let indices = tranche.formats.as_ref().expect("tranche.formats");
+            let mut supported = 0;
+            for &index in indices {
+                let fmt = format_table[index as usize];
+                if egl_display.is_format_supported(Fourcc(fmt.fourcc), fmt.modifier) {
+                    supported += 1;
+                    formats
+                        .entry(Fourcc(fmt.fourcc))
+                        .or_default()
+                        .push(fmt.modifier);
+                }
+            }
+            eprintln!(
+                "Feedback tranche contains {} formats, {supported} of them supported by EGL",
+                indices.len()
+            );
+        }
+
+        // prefer DRM_FORMAT_ARGB8888, fallback to anything
+        const DRM_FORMAT_ARGB8888: Fourcc = Fourcc(u32::from_le_bytes(*b"AR24"));
+        let (format, mods) = match formats.remove(&DRM_FORMAT_ARGB8888) {
+            Some(mods) => (DRM_FORMAT_ARGB8888, mods),
+            None => {
+                let (format, mods) = formats
+                    .into_iter()
+                    .next()
+                    .expect("at least one supported format");
+                eprintln!("ARGB8888 not supported, falling back to {format:?}");
+                (format, mods)
+            }
+        };
+
+        self.gl = Some(Renderer::new(egl_display, format, mods));
+    }
+}
+
+fn xdg_wm_base_cb(ctx: EventCtx<State, XdgWmBase, WaylandChannel>) {
     if let xdg_wm_base::Event::Ping(serial) = ctx.event {
         ctx.proxy.pong(ctx.conn, serial);
     }
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
-//#[tokio::main(flavor = "current_thread")]
-async fn main() {
-    println!("starting wayland_hwc3 {}", std::process::id());
-    //start_hwc3().await;
-    start_wayland_client().await;
+fn assert_shader_ok(shader: u32) {
+    let mut success = 0;
+    unsafe {
+        glGetShaderiv(shader, GL_COMPILE_STATUS, &mut success);
+    }
+
+    if success != 1 {
+        let mut log = [0u8; 1024];
+        let mut len = 0;
+        unsafe {
+            glGetShaderInfoLog(shader, log.len() as _, &mut len, log.as_mut_ptr() as *mut _);
+        }
+        let msg = std::str::from_utf8(&log[..len as usize]).unwrap();
+        panic!("Shader error:\n{msg}");
+    }
+}
+
+fn assert_shader_program_ok(shader_program: u32) {
+    let mut success = 0;
+    unsafe {
+        glGetProgramiv(shader_program, GL_LINK_STATUS, &mut success);
+    }
+
+    if success != 1 {
+        let mut log = [0u8; 1024];
+        let mut len = 0;
+        unsafe {
+            glGetProgramInfoLog(
+                shader_program,
+                log.len() as _,
+                &mut len,
+                log.as_mut_ptr() as *mut _,
+            );
+        }
+        let msg = std::str::from_utf8(&log[..len as usize]).unwrap();
+        panic!("Shader program error:\n{msg}");
+    }
 }

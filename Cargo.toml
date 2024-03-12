@@ -16,7 +16,7 @@ wayrs-egl = "0.5.0"
 android_hardware_common = { path = "android_hardware_common" }
 android_hardware_graphics_common = { path = "android_hardware_graphics_common" }
 android_hardware_graphics_composer3 = { path = "android_hardware_graphics_composer3" }
-
+gles31 = "1.0"
 
 [patch.crates-io]
 shmemfdrs2 = { path = "../rust-deps/shmemfdrs2" }

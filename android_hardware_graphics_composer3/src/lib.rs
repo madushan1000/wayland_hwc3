@@ -1,5 +1,5 @@
 #[allow(soft_unstable)]
-#[allow(non_snake_case)]
+#[allow(non_camel_case_types, non_snake_case, unused)]
 pub mod aidl {
     pub mod android {
         pub mod hardware {
@@ -61,6 +61,7 @@ pub mod aidl {
         }
     }
 }
+#[allow(non_camel_case_types, non_snake_case, unused)]
 pub(crate) mod mangled {
     pub(crate) use android_hardware_common::mangled::*;
     pub(crate) use android_hardware_graphics_common::mangled::*;

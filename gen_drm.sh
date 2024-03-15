@@ -9,7 +9,7 @@ do
 done
 
 curl -s https://chromium.googlesource.com/chromiumos/platform2/+/refs/heads/main/vm_tools/sommelier/virtualization/virtgpu_cross_domain_protocol.h?format=TEXT | base64 -d > drm/virtgpu_cross_domain_protocol.h 
-curl -s https://chromium.googlesource.com/chromiumos/platform2/+/refs/heads/main/vm_tools/sommelier/virtualization/linux-headers/virtgpu_drm.h?format=TEXT | base64 -d > drm/virtgpu_drm.h
+#curl -s https://chromium.googlesource.com/chromiumos/platform2/+/refs/heads/main/vm_tools/sommelier/virtualization/linux-headers/virtgpu_drm.h?format=TEXT | base64 -d > drm/virtgpu_drm.h
 
 cat <<EOF > drm/bindings.h
 #include "drm.h"

@@ -13,7 +13,7 @@ use gles31::{
     GL_LINK_STATUS, GL_MAJOR_VERSION, GL_MINOR_VERSION, GL_RENDERBUFFER, GL_STATIC_DRAW,
     GL_TRIANGLES, GL_VERTEX_SHADER,
 };
-use std::{collections::HashMap, io};
+use std::{collections::HashMap, io, sync::Mutex};
 use tokio::task;
 use wayrs_client::{
     self,
@@ -36,16 +36,20 @@ use wayrs_utils::dmabuf_feedback::{DmabufFeedback, DmabufFeedbackHandler};
 mod virtgpu_wayland;
 use virtgpu_wayland::*;
 
+mod composer_client;
+
 #[allow(non_camel_case_types, non_snake_case, unused_imports)]
 use android_hardware_graphics_composer3::aidl::android::hardware::graphics::composer3::IComposer;
 use android_hardware_graphics_composer3::aidl::android::hardware::graphics::composer3::{
     Capability,
-    IComposer::{BnComposer, IComposerAsync, IComposerAsyncServer},
+    IComposer::{BnComposer, IComposerAsyncServer},
     IComposerClient,
 };
-use binder;
+use binder::{self, BinderFeatures};
 
-pub struct WaylandHwc3Service;
+pub struct WaylandHwc3Service {
+    hwc_client: Mutex<Option<binder::Strong<dyn IComposerClient::IComposerClient>>>,
+}
 
 impl binder::Interface for WaylandHwc3Service {}
 
@@ -54,11 +58,25 @@ impl IComposerAsyncServer for WaylandHwc3Service {
     async fn r#createClient(
         &self,
     ) -> binder::Result<binder::Strong<dyn IComposerClient::IComposerClient>> {
-        panic!("not implimented createClient")
+        let mut client = self.hwc_client.lock().unwrap();
+        if client.is_some() {
+            panic!("hwc client already exists");
+        }
+
+        let new_composer_client = composer_client::ComposerClient {};
+
+        let new_composer_client_binder = IComposerClient::BnComposerClient::new_async_binder(
+            new_composer_client,
+            TokioRuntime(tokio::runtime::Handle::current()),
+            BinderFeatures::default(),
+        );
+
+        client.replace(new_composer_client_binder);
+        Ok(client.as_mut().unwrap().to_owned())
     }
 
     async fn r#getCapabilities(&self) -> binder::Result<Vec<Capability::Capability>> {
-        panic!("not implimented getCapabilities")
+        Ok(vec![])
     }
 }
 
@@ -75,10 +93,12 @@ const SERVICE_IDENTIFIER: &str = "android.hardware.graphics.composer3.IComposer/
 async fn start_hwc3() {
     binder::ProcessState::start_thread_pool();
 
-    let mut _a = String::new();
-    io::stdin().read_line(&mut _a);
+    //let mut _a = String::new();
+    //io::stdin().read_line(&mut _a);
 
-    let wayland_hwc3_service = WaylandHwc3Service;
+    let wayland_hwc3_service = WaylandHwc3Service {
+        hwc_client: Mutex::new(None),
+    };
     let wayland_hwc3_service_binder = BnComposer::new_async_binder(
         wayland_hwc3_service,
         TokioRuntime(tokio::runtime::Handle::current()),
@@ -97,7 +117,9 @@ type WaylandChannel = VirtgpuWaylandChannel;
 
 async fn start_wayland_client() {
     println!("starting wayland client");
-    let (mut conn, globals) = Connection::<State,WaylandChannel>::connect_and_collect_globals().unwrap();
+    let (mut conn, globals) =
+        //Connection::<State, WaylandChannel>::connect_and_collect_globals().unwrap();
+        Connection::<State, WaylandChannel>::async_connect_and_collect_globals().await.unwrap();
     let linux_dmabuf: ZwpLinuxDmabufV1 = globals.bind(&mut conn, 4).unwrap();
     let wl_compositor: WlCompositor = globals.bind(&mut conn, ..=6).unwrap();
     let xdg_wm_base: XdgWmBase = globals
@@ -113,12 +135,14 @@ async fn start_wayland_client() {
     };
 
     while !state.surf.should_close {
-        conn.flush(IoMode::Blocking).unwrap();
         println!("flusing");
-        conn.recv_events(IoMode::Blocking).unwrap();
+        //conn.flush(IoMode::Blocking).unwrap();
+        conn.async_flush().await.unwrap();
         println!("recv_events");
-        conn.dispatch_events(&mut state);
+        //conn.recv_events(IoMode::Blocking).unwrap();
+        conn.async_recv_events().await.unwrap();
         println!("disptach_events");
+        conn.dispatch_events(&mut state);
     }
 }
 
@@ -435,7 +459,11 @@ impl DmabufFeedbackHandler<WaylandChannel> for State {
         &mut self.surf.dmabuf_feedback
     }
 
-    fn feedback_done(&mut self, _: &mut Connection<Self, WaylandChannel>, wl: ZwpLinuxDmabufFeedbackV1) {
+    fn feedback_done(
+        &mut self,
+        _: &mut Connection<Self, WaylandChannel>,
+        wl: ZwpLinuxDmabufFeedbackV1,
+    ) {
         assert_eq!(wl, self.surf.dmabuf_feedback.wl());
 
         if self.gl.is_some() {

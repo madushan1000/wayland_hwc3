@@ -234,6 +234,8 @@ pub const VIRTGPU_EXECBUF_FENCE_FD_IN: u32 = 1;
 pub const VIRTGPU_EXECBUF_FENCE_FD_OUT: u32 = 2;
 pub const VIRTGPU_EXECBUF_RING_IDX: u32 = 4;
 pub const VIRTGPU_EXECBUF_FLAGS: u32 = 7;
+pub const VIRTGPU_EXECBUF_SYNCOBJ_RESET: u32 = 1;
+pub const VIRTGPU_EXECBUF_SYNCOBJ_FLAGS: u32 = 1;
 pub const VIRTGPU_PARAM_3D_FEATURES: u32 = 1;
 pub const VIRTGPU_PARAM_CAPSET_QUERY_FIX: u32 = 2;
 pub const VIRTGPU_PARAM_RESOURCE_BLOB: u32 = 3;
@@ -241,8 +243,7 @@ pub const VIRTGPU_PARAM_HOST_VISIBLE: u32 = 4;
 pub const VIRTGPU_PARAM_CROSS_DEVICE: u32 = 5;
 pub const VIRTGPU_PARAM_CONTEXT_INIT: u32 = 6;
 pub const VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs: u32 = 7;
-pub const VIRTGPU_RESOURCE_INFO_TYPE_DEFAULT: u32 = 0;
-pub const VIRTGPU_RESOURCE_INFO_TYPE_EXTENDED: u32 = 1;
+pub const VIRTGPU_PARAM_EXPLICIT_DEBUG_NAME: u32 = 8;
 pub const VIRTGPU_WAIT_NOWAIT: u32 = 1;
 pub const VIRTGPU_BLOB_MEM_GUEST: u32 = 1;
 pub const VIRTGPU_BLOB_MEM_HOST3D: u32 = 2;
@@ -253,6 +254,7 @@ pub const VIRTGPU_BLOB_FLAG_USE_CROSS_DEVICE: u32 = 4;
 pub const VIRTGPU_CONTEXT_PARAM_CAPSET_ID: u32 = 1;
 pub const VIRTGPU_CONTEXT_PARAM_NUM_RINGS: u32 = 2;
 pub const VIRTGPU_CONTEXT_PARAM_POLL_RINGS_MASK: u32 = 3;
+pub const VIRTGPU_CONTEXT_PARAM_DEBUG_NAME: u32 = 4;
 pub const VIRTGPU_EVENT_FENCE_SIGNALED: u32 = 2415919104;
 pub const _STDINT_H: u32 = 1;
 pub const _FEATURES_H: u32 = 1;
@@ -1826,6 +1828,13 @@ pub struct drm_virtgpu_map {
 }
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone)]
+pub struct drm_virtgpu_execbuffer_syncobj {
+    pub handle: __u32,
+    pub flags: __u32,
+    pub point: __u64,
+}
+#[repr(C)]
+#[derive(Debug, Default, Copy, Clone)]
 pub struct drm_virtgpu_execbuffer {
     pub flags: __u32,
     pub size: __u32,
@@ -1834,7 +1843,11 @@ pub struct drm_virtgpu_execbuffer {
     pub num_bo_handles: __u32,
     pub fence_fd: __s32,
     pub ring_idx: __u32,
-    pub pad: __u32,
+    pub syncobj_stride: __u32,
+    pub num_in_syncobjs: __u32,
+    pub num_out_syncobjs: __u32,
+    pub in_syncobjs: __u64,
+    pub out_syncobjs: __u64,
 }
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone)]
@@ -1867,43 +1880,6 @@ pub struct drm_virtgpu_resource_info {
     pub res_handle: __u32,
     pub size: __u32,
     pub blob_mem: __u32,
-}
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct drm_virtgpu_resource_info_cros {
-    pub bo_handle: __u32,
-    pub res_handle: __u32,
-    pub size: __u32,
-    pub __bindgen_anon_1: drm_virtgpu_resource_info_cros__bindgen_ty_1,
-    pub num_planes: __u32,
-    pub offsets: [__u32; 4usize],
-    pub format_modifier: __u64,
-}
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub union drm_virtgpu_resource_info_cros__bindgen_ty_1 {
-    pub type_: __u32,
-    pub blob_mem: __u32,
-    pub stride: __u32,
-    pub strides: [__u32; 4usize],
-}
-impl Default for drm_virtgpu_resource_info_cros__bindgen_ty_1 {
-    fn default() -> Self {
-        let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
-}
-impl Default for drm_virtgpu_resource_info_cros {
-    fn default() -> Self {
-        let mut s = ::std::mem::MaybeUninit::<Self>::uninit();
-        unsafe {
-            ::std::ptr::write_bytes(s.as_mut_ptr(), 0, 1);
-            s.assume_init()
-        }
-    }
 }
 #[repr(C)]
 #[derive(Debug, Default, Copy, Clone)]

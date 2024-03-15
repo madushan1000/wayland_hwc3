@@ -257,9 +257,9 @@ checksum = "290f1a1d9242c78d09ce40a5e87e7554ee637af1351968159f4952f028f75604"
 
 [[package]]
 name = "hermit-abi"
-version = "0.3.6"
+version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd5256b483761cd23699d0da46cc6fd2ee3be420bbe6d020ae4a091e70b7e9fd"
+checksum = "d231dfb89cfffdbc30e7fc41579ed6066ad03abda9e567ccafae602b97ec5024"
 
 [[package]]
 name = "home"
@@ -369,11 +369,12 @@ dependencies = [
 
 [[package]]
 name = "mio"
-version = "0.8.10"
+version = "0.8.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f3d0b296e374a4e6f3c7b0a1f5a51d748a0d34c85e7dc48fc3fa9a87657fe09"
+checksum = "a4a650543ca06a924e8b371db273b2756685faae30f8487da1b56505a8f78b0c"
 dependencies = [
  "libc",
+ "log",
  "wasi",
  "windows-sys 0.48.0",
 ]
@@ -721,6 +722,7 @@ dependencies = [
  "binder_ndk",
  "binder_tokio",
  "gles31",
+ "mio",
  "nix",
  "tokio",
  "wayrs-client",
@@ -744,6 +746,7 @@ name = "wayrs-core"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "thiserror",
 ]
 
 [[package]]
@@ -753,6 +756,7 @@ dependencies = [
  "gbm-sys",
  "libc",
  "thiserror",
+ "tokio",
  "wayrs-client",
  "wayrs-protocols",
 ]
@@ -767,7 +771,7 @@ dependencies = [
 
 [[package]]
 name = "wayrs-protocols"
-version = "0.13.1"
+version = "0.13.2"
 dependencies = [
  "wayrs-client",
 ]

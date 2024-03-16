@@ -184,7 +184,7 @@ impl IComposerClientAsyncServer for ComposerClient {
         &self,
         callback: &binder::Strong<dyn IComposerCallback>,
     ) -> binder::Result<()> {
-        callback.onHotplug( 1, true).unwrap();
+        callback.onHotplug(1, true).unwrap();
         Ok(())
     }
     async fn r#setActiveConfig(&self, _arg_display: i64, _arg_config: i32) -> binder::Result<()> {

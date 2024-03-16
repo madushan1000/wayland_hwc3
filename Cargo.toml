@@ -17,12 +17,13 @@ android_hardware_common = { path = "android_hardware_common" }
 android_hardware_graphics_common = { path = "android_hardware_graphics_common" }
 android_hardware_graphics_composer3 = { path = "android_hardware_graphics_composer3" }
 gles31 = "1.0"
-mio = "0.8.10"
-
+wayrs-client-transport-virtgpu = {path = "../wayrs-client-transport-virtgpu"}
+ 
 [patch.crates-io]
 shmemfdrs2 = { path = "../rust-deps/shmemfdrs2" }
 libc = { path = "../rust-deps/libc" }
 wayrs-client = { path = "../rust-deps/wayrs/wayrs-client" }
+wayrs-core = { path = "../rust-deps/wayrs/wayrs-core" }
 wayrs-protocols = { path = "../rust-deps/wayrs/wayrs-protocols" }
 wayrs-utils = { path = "../rust-deps/wayrs/wayrs-utils" }
 wayrs-egl = { path = "../rust-deps/wayrs/wayrs-egl" }

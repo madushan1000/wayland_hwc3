@@ -374,7 +374,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4a650543ca06a924e8b371db273b2756685faae30f8487da1b56505a8f78b0c"
 dependencies = [
  "libc",
- "log",
  "wasi",
  "windows-sys 0.48.0",
 ]
@@ -722,10 +721,10 @@ dependencies = [
  "binder_ndk",
  "binder_tokio",
  "gles31",
- "mio",
  "nix",
  "tokio",
  "wayrs-client",
+ "wayrs-client-transport-virtgpu",
  "wayrs-egl",
  "wayrs-protocols",
  "wayrs-utils",
@@ -739,6 +738,15 @@ dependencies = [
  "tokio",
  "wayrs-core",
  "wayrs-scanner",
+]
+
+[[package]]
+name = "wayrs-client-transport-virtgpu"
+version = "0.1.0"
+dependencies = [
+ "nix",
+ "wayrs-client",
+ "wayrs-core",
 ]
 
 [[package]]
@@ -756,7 +764,6 @@ dependencies = [
  "gbm-sys",
  "libc",
  "thiserror",
- "tokio",
  "wayrs-client",
  "wayrs-protocols",
 ]

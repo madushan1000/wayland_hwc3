@@ -1,26 +1,15 @@
 use async_trait::async_trait;
 use binder_tokio::*;
-use gles31::{
-    glAttachShader, glBindBuffer, glBindFramebuffer, glBindRenderbuffer, glBindVertexArray,
-    glBufferData, glCheckFramebufferStatus, glClear, glClearColor, glCompileShader,
-    glCreateProgram, glCreateShader, glDeleteShader, glDrawArrays, glDrawBuffers,
-    glEnableVertexAttribArray, glFinish, glFramebufferRenderbuffer, glGenBuffers,
-    glGenFramebuffers, glGenRenderbuffers, glGenVertexArrays, glGetIntegerv, glGetProgramInfoLog,
-    glGetProgramiv, glGetShaderInfoLog, glGetShaderiv, glGetUniformLocation, glLinkProgram,
-    glShaderSource, glUniform1f, glUniform2f, glUseProgram, glVertexAttribPointer, glViewport,
-    load_gl_functions, GL_ARRAY_BUFFER, GL_COLOR_ATTACHMENT0, GL_COLOR_BUFFER_BIT,
-    GL_COMPILE_STATUS, GL_FLOAT, GL_FRAGMENT_SHADER, GL_FRAMEBUFFER, GL_FRAMEBUFFER_COMPLETE,
-    GL_LINK_STATUS, GL_MAJOR_VERSION, GL_MINOR_VERSION, GL_RENDERBUFFER, GL_STATIC_DRAW,
-    GL_TRIANGLES, GL_VERTEX_SHADER,
-};
-use std::{collections::HashMap, io, sync::Mutex};
+use gles31::*;
+use std::{collections::HashMap, sync::Mutex};
 use tokio::task;
 use wayrs_client::{
     self,
     global::GlobalsExt,
     protocol::{wl_callback, wl_output, WlCallback, WlCompositor, WlSurface},
-    Connection, EventCtx, IoMode,
+    Connection, EventCtx,
 };
+use wayrs_client_transport_virtgpu::*;
 use wayrs_egl::{
     egl_ffi, Buffer, BufferPool, DrmDevice, EglContext, EglContextBuilder, EglDisplay, Fourcc,
     GraphicsApi,
@@ -32,9 +21,6 @@ use wayrs_protocols::{
     xdg_shell::{xdg_surface, xdg_toplevel, xdg_wm_base, XdgSurface, XdgToplevel, XdgWmBase},
 };
 use wayrs_utils::dmabuf_feedback::{DmabufFeedback, DmabufFeedbackHandler};
-
-mod virtgpu_wayland;
-use virtgpu_wayland::*;
 
 mod composer_client;
 
@@ -113,7 +99,7 @@ async fn start_hwc3() {
     });
 }
 
-type WaylandChannel = VirtgpuWaylandChannel;
+type WaylandChannel = VirtgpuChannel;
 
 async fn start_wayland_client() {
     println!("starting wayland client");
@@ -135,13 +121,13 @@ async fn start_wayland_client() {
     };
 
     while !state.surf.should_close {
-        println!("flusing");
+        //println!("flusing");
         //conn.flush(IoMode::Blocking).unwrap();
         conn.async_flush().await.unwrap();
-        println!("recv_events");
+        //println!("recv_events");
         //conn.recv_events(IoMode::Blocking).unwrap();
         conn.async_recv_events().await.unwrap();
-        println!("disptach_events");
+        //println!("disptach_events");
         conn.dispatch_events(&mut state);
     }
 }
@@ -411,7 +397,6 @@ impl Surface {
 
         conn.set_callback_for(xdg_surface, |ctx| {
             if let xdg_surface::Event::Configure(serial) = ctx.event {
-                println!("at configure");
                 ctx.proxy.ack_configure(ctx.conn, serial);
                 ctx.state.surf.mapped = true;
                 ctx.state.render(ctx.conn, None);

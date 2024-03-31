@@ -1,12 +1,11 @@
 #!/bin/env zsh
 AOSP_PATH=../aosp
+AIDL_PATH=aidl
 
 $AOSP_PATH/out/host/linux-x86/bin/aidl \
     --lang=rust \
-    $AOSP_PATH/hardware/interfaces/graphics/composer/aidl/**/**.aidl \
-    -I $AOSP_PATH/hardware/interfaces/graphics/common/aidl  \
-    -I $AOSP_PATH/hardware/interfaces/common/aidl \
-    -I $AOSP_PATH/hardware/interfaces/graphics/composer/aidl \
+    $AIDL_PATH/android/hardware/graphics/composer3/*.aidl \
+    -I $AIDL_PATH/ \
     --stability=vintf \
     --structured \
     -o android_hardware_graphics_composer3/src/aidl
@@ -14,17 +13,16 @@ $AOSP_PATH/out/host/linux-x86/bin/aidl \
 
 $AOSP_PATH/out/host/linux-x86/bin/aidl \
     --lang=rust \
-    $AOSP_PATH/hardware/interfaces/graphics/common/aidl/**/**.aidl \
-    -I $AOSP_PATH/hardware/interfaces/common/aidl \
-    -I $AOSP_PATH/hardware/interfaces/graphics/common/aidl \
+    $AIDL_PATH/android/hardware/graphics/common/*.aidl \
+    -I $AIDL_PATH/ \
     --stability=vintf \
     --structured \
     -o android_hardware_graphics_common/src/aidl
 
 $AOSP_PATH/out/host/linux-x86/bin/aidl \
-    $AOSP_PATH/hardware/interfaces/common/aidl/**/**.aidl \
+    $AIDL_PATH/android/hardware/common/*.aidl \
     --lang=rust \
-    -I $AOSP_PATH/hardware/interfaces/common/aidl \
+    -I $AIDL_PATH/ \
     --stability=vintf \
     --structured \
     -o android_hardware_common/src/aidl

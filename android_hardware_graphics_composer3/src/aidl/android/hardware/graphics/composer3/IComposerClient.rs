@@ -60,6 +60,7 @@ pub trait IComposerClient: binder::Interface + Send {
   fn r#getHdrConversionCapabilities(&self) -> binder::Result<Vec<crate::mangled::_7_android_8_hardware_8_graphics_6_common_23_HdrConversionCapability>>;
   fn r#setHdrConversionStrategy(&self, _arg_conversionStrategy: &crate::mangled::_7_android_8_hardware_8_graphics_6_common_21_HdrConversionStrategy) -> binder::Result<crate::mangled::_7_android_8_hardware_8_graphics_6_common_3_Hdr>;
   fn r#setRefreshRateChangedCallbackDebugEnabled(&self, _arg_display: i64, _arg_enabled: bool) -> binder::Result<()>;
+  fn r#setLayerName(&self, _arg_display: i64, _arg_layer: i64, _arg_name: &str) -> binder::Result<()>;
   fn getDefaultImpl() -> IComposerClientDefaultRef where Self: Sized {
     DEFAULT_IMPL.lock().unwrap().clone()
   }
@@ -114,6 +115,7 @@ pub trait IComposerClientAsync<P>: binder::Interface + Send {
   fn r#getHdrConversionCapabilities<'a>(&'a self) -> binder::BoxFuture<'a, binder::Result<Vec<crate::mangled::_7_android_8_hardware_8_graphics_6_common_23_HdrConversionCapability>>>;
   fn r#setHdrConversionStrategy<'a>(&'a self, _arg_conversionStrategy: &'a crate::mangled::_7_android_8_hardware_8_graphics_6_common_21_HdrConversionStrategy) -> binder::BoxFuture<'a, binder::Result<crate::mangled::_7_android_8_hardware_8_graphics_6_common_3_Hdr>>;
   fn r#setRefreshRateChangedCallbackDebugEnabled<'a>(&'a self, _arg_display: i64, _arg_enabled: bool) -> binder::BoxFuture<'a, binder::Result<()>>;
+  fn r#setLayerName<'a>(&'a self, _arg_display: i64, _arg_layer: i64, _arg_name: &'a str) -> binder::BoxFuture<'a, binder::Result<()>>;
 }
 #[::async_trait::async_trait]
 pub trait IComposerClientAsyncServer: binder::Interface + Send {
@@ -163,6 +165,7 @@ pub trait IComposerClientAsyncServer: binder::Interface + Send {
   async fn r#getHdrConversionCapabilities(&self) -> binder::Result<Vec<crate::mangled::_7_android_8_hardware_8_graphics_6_common_23_HdrConversionCapability>>;
   async fn r#setHdrConversionStrategy(&self, _arg_conversionStrategy: &crate::mangled::_7_android_8_hardware_8_graphics_6_common_21_HdrConversionStrategy) -> binder::Result<crate::mangled::_7_android_8_hardware_8_graphics_6_common_3_Hdr>;
   async fn r#setRefreshRateChangedCallbackDebugEnabled(&self, _arg_display: i64, _arg_enabled: bool) -> binder::Result<()>;
+  async fn r#setLayerName(&self, _arg_display: i64, _arg_layer: i64, _arg_name: &str) -> binder::Result<()>;
 }
 impl BnComposerClient {
   /// Create a new async binder service.
@@ -319,6 +322,9 @@ impl BnComposerClient {
       fn r#setRefreshRateChangedCallbackDebugEnabled(&self, _arg_display: i64, _arg_enabled: bool) -> binder::Result<()> {
         self._rt.block_on(self._inner.r#setRefreshRateChangedCallbackDebugEnabled(_arg_display, _arg_enabled))
       }
+      fn r#setLayerName(&self, _arg_display: i64, _arg_layer: i64, _arg_name: &str) -> binder::Result<()> {
+        self._rt.block_on(self._inner.r#setLayerName(_arg_display, _arg_layer, _arg_name))
+      }
     }
     let wrapped = Wrapper { _inner: inner, _rt: rt };
     Self::new_binder(wrapped, features)
@@ -460,6 +466,9 @@ pub trait IComposerClientDefault: Send + Sync {
   fn r#setRefreshRateChangedCallbackDebugEnabled(&self, _arg_display: i64, _arg_enabled: bool) -> binder::Result<()> {
     Err(binder::StatusCode::UNKNOWN_TRANSACTION.into())
   }
+  fn r#setLayerName(&self, _arg_display: i64, _arg_layer: i64, _arg_name: &str) -> binder::Result<()> {
+    Err(binder::StatusCode::UNKNOWN_TRANSACTION.into())
+  }
 }
 pub mod transactions {
   pub const r#createLayer: binder::binder_impl::TransactionCode = binder::binder_impl::FIRST_CALL_TRANSACTION + 0;
@@ -507,6 +516,7 @@ pub mod transactions {
   pub const r#getHdrConversionCapabilities: binder::binder_impl::TransactionCode = binder::binder_impl::FIRST_CALL_TRANSACTION + 42;
   pub const r#setHdrConversionStrategy: binder::binder_impl::TransactionCode = binder::binder_impl::FIRST_CALL_TRANSACTION + 43;
   pub const r#setRefreshRateChangedCallbackDebugEnabled: binder::binder_impl::TransactionCode = binder::binder_impl::FIRST_CALL_TRANSACTION + 44;
+  pub const r#setLayerName: binder::binder_impl::TransactionCode = binder::binder_impl::FIRST_CALL_TRANSACTION + 45;
 }
 pub type IComposerClientDefaultRef = Option<std::sync::Arc<dyn IComposerClientDefault>>;
 use lazy_static::lazy_static;
@@ -1299,6 +1309,24 @@ impl BpComposerClient {
     if !_aidl_status.is_ok() { return Err(_aidl_status); }
     Ok(())
   }
+  fn build_parcel_setLayerName(&self, _arg_display: i64, _arg_layer: i64, _arg_name: &str) -> binder::Result<binder::binder_impl::Parcel> {
+    let mut aidl_data = self.binder.prepare_transact()?;
+    aidl_data.write(&_arg_display)?;
+    aidl_data.write(&_arg_layer)?;
+    aidl_data.write(_arg_name)?;
+    Ok(aidl_data)
+  }
+  fn read_response_setLayerName(&self, _arg_display: i64, _arg_layer: i64, _arg_name: &str, _aidl_reply: std::result::Result<binder::binder_impl::Parcel, binder::StatusCode>) -> binder::Result<()> {
+    if let Err(binder::StatusCode::UNKNOWN_TRANSACTION) = _aidl_reply {
+      if let Some(_aidl_default_impl) = <Self as IComposerClient>::getDefaultImpl() {
+        return _aidl_default_impl.r#setLayerName(_arg_display, _arg_layer, _arg_name);
+      }
+    }
+    let _aidl_reply = _aidl_reply?;
+    let _aidl_status: binder::Status = _aidl_reply.read()?;
+    if !_aidl_status.is_ok() { return Err(_aidl_status); }
+    Ok(())
+  }
 }
 impl IComposerClient for BpComposerClient {
   fn r#createLayer(&self, _arg_display: i64, _arg_bufferSlotCount: i32) -> binder::Result<i64> {
@@ -1525,6 +1553,11 @@ impl IComposerClient for BpComposerClient {
     let _aidl_data = self.build_parcel_setRefreshRateChangedCallbackDebugEnabled(_arg_display, _arg_enabled)?;
     let _aidl_reply = self.binder.submit_transact(transactions::r#setRefreshRateChangedCallbackDebugEnabled, _aidl_data, binder::binder_impl::FLAG_PRIVATE_LOCAL);
     self.read_response_setRefreshRateChangedCallbackDebugEnabled(_arg_display, _arg_enabled, _aidl_reply)
+  }
+  fn r#setLayerName(&self, _arg_display: i64, _arg_layer: i64, _arg_name: &str) -> binder::Result<()> {
+    let _aidl_data = self.build_parcel_setLayerName(_arg_display, _arg_layer, _arg_name)?;
+    let _aidl_reply = self.binder.submit_transact(transactions::r#setLayerName, _aidl_data, binder::binder_impl::FLAG_PRIVATE_LOCAL);
+    self.read_response_setLayerName(_arg_display, _arg_layer, _arg_name, _aidl_reply)
   }
 }
 impl<P: binder::BinderAsyncPool> IComposerClientAsync<P> for BpComposerClient {
@@ -2113,6 +2146,19 @@ impl<P: binder::BinderAsyncPool> IComposerClientAsync<P> for BpComposerClient {
       }
     )
   }
+  fn r#setLayerName<'a>(&'a self, _arg_display: i64, _arg_layer: i64, _arg_name: &'a str) -> binder::BoxFuture<'a, binder::Result<()>> {
+    let _aidl_data = match self.build_parcel_setLayerName(_arg_display, _arg_layer, _arg_name) {
+      Ok(_aidl_data) => _aidl_data,
+      Err(err) => return Box::pin(std::future::ready(Err(err))),
+    };
+    let binder = self.binder.clone();
+    P::spawn(
+      move || binder.submit_transact(transactions::r#setLayerName, _aidl_data, binder::binder_impl::FLAG_PRIVATE_LOCAL),
+      move |_aidl_reply| async move {
+        self.read_response_setLayerName(_arg_display, _arg_layer, _arg_name, _aidl_reply)
+      }
+    )
+  }
 }
 impl IComposerClient for binder::binder_impl::Binder<BnComposerClient> {
   fn r#createLayer(&self, _arg_display: i64, _arg_bufferSlotCount: i32) -> binder::Result<i64> { self.0.r#createLayer(_arg_display, _arg_bufferSlotCount) }
@@ -2160,6 +2206,7 @@ impl IComposerClient for binder::binder_impl::Binder<BnComposerClient> {
   fn r#getHdrConversionCapabilities(&self) -> binder::Result<Vec<crate::mangled::_7_android_8_hardware_8_graphics_6_common_23_HdrConversionCapability>> { self.0.r#getHdrConversionCapabilities() }
   fn r#setHdrConversionStrategy(&self, _arg_conversionStrategy: &crate::mangled::_7_android_8_hardware_8_graphics_6_common_21_HdrConversionStrategy) -> binder::Result<crate::mangled::_7_android_8_hardware_8_graphics_6_common_3_Hdr> { self.0.r#setHdrConversionStrategy(_arg_conversionStrategy) }
   fn r#setRefreshRateChangedCallbackDebugEnabled(&self, _arg_display: i64, _arg_enabled: bool) -> binder::Result<()> { self.0.r#setRefreshRateChangedCallbackDebugEnabled(_arg_display, _arg_enabled) }
+  fn r#setLayerName(&self, _arg_display: i64, _arg_layer: i64, _arg_name: &str) -> binder::Result<()> { self.0.r#setLayerName(_arg_display, _arg_layer, _arg_name) }
 }
 fn on_transact(_aidl_service: &dyn IComposerClient, _aidl_code: binder::binder_impl::TransactionCode, _aidl_data: &binder::binder_impl::BorrowedParcel<'_>, _aidl_reply: &mut binder::binder_impl::BorrowedParcel<'_>) -> std::result::Result<(), binder::StatusCode> {
   match _aidl_code {
@@ -2704,6 +2751,19 @@ fn on_transact(_aidl_service: &dyn IComposerClient, _aidl_code: binder::binder_i
       let _arg_display: i64 = _aidl_data.read()?;
       let _arg_enabled: bool = _aidl_data.read()?;
       let _aidl_return = _aidl_service.r#setRefreshRateChangedCallbackDebugEnabled(_arg_display, _arg_enabled);
+      match &_aidl_return {
+        Ok(_aidl_return) => {
+          _aidl_reply.write(&binder::Status::from(binder::StatusCode::OK))?;
+        }
+        Err(_aidl_status) => _aidl_reply.write(_aidl_status)?
+      }
+      Ok(())
+    }
+    transactions::r#setLayerName => {
+      let _arg_display: i64 = _aidl_data.read()?;
+      let _arg_layer: i64 = _aidl_data.read()?;
+      let _arg_name: String = _aidl_data.read()?;
+      let _aidl_return = _aidl_service.r#setLayerName(_arg_display, _arg_layer, &_arg_name);
       match &_aidl_return {
         Ok(_aidl_return) => {
           _aidl_reply.write(&binder::Status::from(binder::StatusCode::OK))?;

@@ -10,7 +10,7 @@ nix = { version = "0.27.0", features = ["ioctl", "feature", "mman", "socket", "u
 tokio = { version = "1.25.0", features = ["rt"] }
 async-trait = "0.1.74"
 wayrs-client = { version = "1.0.2", features = ["tokio"] }
-wayrs-protocols = { version = "0.13.1", features = ["xdg-shell", "linux-dmabuf-unstable-v1"] }
+wayrs-protocols = { version = "0.13.1", features = ["xdg-shell", "linux-dmabuf-unstable-v1", "single-pixel-buffer-v1", "viewporter"] }
 wayrs-utils = { version = "0.14.0", features = ["shm_alloc", "dmabuf_feedback"]}
 wayrs-egl = "0.5.0"
 android_hardware_common = { path = "android_hardware_common" }

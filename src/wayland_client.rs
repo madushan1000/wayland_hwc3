@@ -139,7 +139,7 @@ impl WaylandState {
                 self.display_to_window.insert(display, window_id);
                 self.windows.insert(window_id, window);
             }
-            HwcEvent::PresentDisplay {display} => {
+            HwcEvent::PresentDisplay { display } => {
                 let window_id = self.display_to_window.get(&display).unwrap();
                 let window = self.windows.get_mut(window_id).unwrap();
                 window.present_display(conn);
@@ -288,13 +288,36 @@ impl WaylandWindow {
     }
 
     fn present_display(&mut self, conn: &mut Connection<WaylandState, WaylandChannel>) {
-        if self.configured {
-            self.surface.attach(conn, Some(self.buffer), 0, 0);
-            self.subsurfaces
-                .iter_mut()
-                .for_each(|(_, x)| x.surface.commit(conn));
-            self.surface.commit(conn);
+        if !self.configured {
+            return;
         }
+        self.surface.attach(conn, Some(self.buffer), 0, 0);
+
+        self
+            .subsurfaces
+            .values()
+            .for_each(|x| println!("{:?}", (x.z, x.subsurface, x.surface, &x.name, x.id, x.buffer.is_some())));
+        let mut zorders = self
+            .subsurfaces
+            .values()
+            .filter(|x| x.buffer.is_some())
+            .map(|x| (x.z, x.subsurface, x.surface, &x.name, x.id))
+            .collect::<Vec<_>>();
+        zorders.sort_by_key(|x| x.0);
+        zorders
+            .iter()
+            .enumerate()
+            .for_each(|(i, (z, subsurface, _, _, _))| {
+                if *z == 0 || i == 0 {
+                    subsurface.place_above(conn, self.surface)
+                } else {
+                    subsurface.place_above(conn, zorders[i - 1].2)
+                }
+            });
+        self.subsurfaces
+            .iter_mut()
+            .for_each(|(_, x)| x.surface.commit(conn));
+        self.surface.commit(conn);
     }
 
     fn get_parent_for_z(&self, z: i32) -> WlSurface {
@@ -319,6 +342,7 @@ struct WaylandSubSurface {
     buffer: Option<WlBuffer>,
     z: i32,
     id: i64,
+    name: String,
 }
 
 impl WaylandSubSurface {
@@ -344,13 +368,17 @@ impl WaylandSubSurface {
             id,
             buffer: None,
             z: 0,
+            name: "".into(),
         }
     }
     async fn present_layer(&mut self, conn: &mut Connection<WaylandState, WaylandChannel>) {
         println!("waiting for fence");
         let fence = {
             let mut state = self.composer_client_state.lock().unwrap();
-            let layer = &mut state.layers.get_mut(&(self.id)).unwrap();
+            let layer = &mut match state.layers.get_mut(&(self.id)) {
+                Some(layer) => layer,
+                None => return,
+            };
             let current_slot = layer.slot;
             let buffer = &mut layer.buffers[current_slot as usize];
             if buffer.is_none() {
@@ -376,8 +404,6 @@ impl WaylandSubSurface {
         let current_slot = layer.slot;
         let buffer = &layer.buffers[current_slot as usize].as_ref().unwrap();
 
-        //let fourcc = pixel_format_to_drm_format(client_buffer.ints[4]);
-        //println!("format: {}, fourcc: {:?}", client_buffer.ints[4], fourcc);
         let wl_buffer_params = self.linux_dmabuf.create_params(conn);
 
         let extra_fd_len = DRV_MAX_FDS - buffer.fds.len();
@@ -393,8 +419,6 @@ impl WaylandSubSurface {
         println!("{:?}", gralloc_handle);
         let width = gralloc_handle.width;
         let height = gralloc_handle.height;
-        //let width = client_buffer.ints[16];
-        //let height = client_buffer.ints[17];
 
         for (i, fd) in buffer
             .fds
@@ -421,9 +445,7 @@ impl WaylandSubSurface {
             conn,
             width as i32,
             height as i32,
-            //fourcc.0,
             gralloc_handle.format,
-            //client_buffer.ints[18] as u32,
             zwp_linux_buffer_params_v1::Flags::empty(),
         );
         wl_buffer_params.destroy(conn);
@@ -440,18 +462,42 @@ impl WaylandSubSurface {
         let source_crop = layer.source_crop.as_ref().unwrap();
         self.subsurface
             .set_position(conn, display_frame.left, display_frame.top);
+
+        let crop_width = source_crop.right - source_crop.left;
+        let crop_height = source_crop.bottom - source_crop.top;
+        let crop_width = if crop_width <= 0.0 {
+            width as f32
+        } else {
+            crop_width
+        };
+        let crop_height = if crop_height <= 0.0 {
+            height as f32
+        } else {
+            crop_height
+        };
         self.viewport.set_source(
             conn,
             source_crop.left.into(),
             source_crop.top.into(),
-            (source_crop.right - source_crop.left).into(),
-            (source_crop.bottom - source_crop.top).into(),
+            crop_width.into(),
+            crop_height.into(),
         );
-        self.viewport.set_destination(
-            conn,
-            display_frame.right - display_frame.left,
-            display_frame.bottom - display_frame.top,
-        );
+        let strech_width = display_frame.right - display_frame.left;
+        let strech_height = display_frame.bottom - display_frame.top;
+        let strech_width  = if strech_width <= 0 {
+            width as i32
+        } else {
+            strech_width
+        };
+        let strech_height = if strech_height <= 0 {
+            height as i32
+        } else {
+            strech_height
+        };
+        self.viewport
+            .set_destination(conn, strech_width, strech_height);
+        self.z = layer.z.unwrap_or(0);
+        self.name = layer.name.clone();
     }
 }
 

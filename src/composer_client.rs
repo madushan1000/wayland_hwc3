@@ -88,8 +88,8 @@ impl ComposerClientState {
         Self {
             display_config: vec![
                 /*invalid*/ 0,
-                /*width*/ 500,
-                /*height*/ 500,
+                /*width*/ 1080,
+                /*height*/ 720,
                 /*vsync_period*/ 1000 * 1000 * 1000 / 60,
                 /*dpi_x*/ 100,
                 /*dpi_y*/ 100,
@@ -211,6 +211,7 @@ impl From<&ClientBuffer> for ClientBuffer {
 #[derive(Debug, Default)]
 pub struct ClientLayer {
     pub buffer_slot_count: i32,
+    pub name: String,
     pub layer: i64,
     pub slot: i32,
     pub cursor_position: Option<()>, //TODO
@@ -255,11 +256,11 @@ impl ClientLayer {
                     Some(ClientBuffer::from(command.buffer.as_ref().unwrap()));
             }
             if handle.is_none() {
-                self.buffers[*slot as usize].as_mut().unwrap().fence = Some(
-                    unsafe { BorrowedFd::borrow_raw(fence.as_ref().unwrap().as_raw_fd()) }
+                self.buffers[*slot as usize].as_mut().unwrap().fence = fence.as_ref().map(|fd| {
+                    unsafe { BorrowedFd::borrow_raw(fd.as_raw_fd()) }
                         .try_clone_to_owned()
-                        .unwrap(),
-                );
+                        .unwrap()
+                });
             }
             self.slot = *slot;
         }
@@ -505,7 +506,22 @@ impl IComposerClientAsyncServer for ComposerClient {
         &self,
         _arg_display: i64,
     ) -> binder::Result<DisplayIdentification> {
-        Err(IComposerClient::EX_UNSUPPORTED.into())
+        let edid = [
+            0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x1c, 0xec, 0x01, 0x00, 0x01, 0x00,
+            0x00, 0x00, 0x1b, 0x10, 0x01, 0x03, 0x80, 0x50, 0x2d, 0x78, 0x0a, 0x0d, 0xc9, 0xa0,
+            0x57, 0x47, 0x98, 0x27, 0x12, 0x48, 0x4c, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01,
+            0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x02, 0x3a,
+            0x80, 0x18, 0x71, 0x38, 0x2d, 0x40, 0x58, 0x2c, 0x45, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfc,
+            0x00, 0x45, 0x4d, 0x55, 0x5f, 0x64, 0x69, 0x73, 0x70, 0x6c, 0x61, 0x79, 0x5f, 0x30,
+            0x00, 0x4b,
+        ];
+        Ok(DisplayIdentification {
+            port: 0,
+            data: edid.to_vec(),
+        })
     }
     async fn r#getDisplayName(&self, _arg_display: i64) -> binder::Result<String> {
         todo!()
@@ -713,8 +729,10 @@ impl IComposerClientAsyncServer for ComposerClient {
     ) -> binder::Result<()> {
         todo!()
     }
-    async fn r#setLayerName(&self, display: i64, layer: i64, name: &str) -> binder::Result<()> {
-        println!("getLayerName: {} {} {}", display, layer, name);
+    async fn r#setLayerName(&self, display: i64, layer_id: i64, name: &str) -> binder::Result<()> {
+        let mut state = self.state.lock().unwrap();
+        state.layers.get_mut(&layer_id).unwrap().name = name.into();
+        println!("setLayerName: {} {} {}", display, layer_id, name);
         Ok(())
     }
 }

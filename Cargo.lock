@@ -53,6 +53,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "android_hardware_input"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "binder_ndk",
+ "binder_tokio",
+ "input_manager",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.80"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -93,8 +103,6 @@ dependencies = [
 [[package]]
 name = "binder_ndk"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f26b36a1fd293c656c21d7eee8cfecd5c7f565877f645c7a75eb55987cf9d66"
 dependencies = [
  "binder_ndk_sys",
  "downcast-rs",
@@ -104,8 +112,6 @@ dependencies = [
 [[package]]
 name = "binder_ndk_sys"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5bf881cc812454d64f7272d3b294f60c62c93f6c1972725384994161c2843456"
 dependencies = [
  "anyhow",
  "bindgen",
@@ -114,8 +120,6 @@ dependencies = [
 [[package]]
 name = "binder_tokio"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b0dccb96c1e2d9f12f88894c9976762341850fe3a0db91c9fdfef1b2e26c32d"
 dependencies = [
  "binder_ndk",
  "tokio",
@@ -278,6 +282,13 @@ checksum = "233cf39063f058ea2caae4091bf4a3ef70a653afbc026f5c4a4135d114e3c177"
 dependencies = [
  "equivalent",
  "hashbrown",
+]
+
+[[package]]
+name = "input_manager"
+version = "0.1.0"
+dependencies = [
+ "binder_ndk",
 ]
 
 [[package]]
@@ -507,9 +518,9 @@ dependencies = [
 
 [[package]]
 name = "regex"
-version = "1.10.3"
+version = "1.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b62dbe01f0b06f9d8dc7d49e05a0785f153b00b2c227856282f671e0318c9b15"
+checksum = "c117dbdfde9c8308975b6a18d71f3f385c89461f7b3fb054288ecf2a2058ba4c"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -717,11 +728,14 @@ dependencies = [
  "android_hardware_common",
  "android_hardware_graphics_common",
  "android_hardware_graphics_composer3",
+ "android_hardware_input",
  "async-trait",
  "binder_ndk",
  "binder_tokio",
  "gles31",
+ "libc",
  "nix",
+ "regex",
  "tokio",
  "wayrs-client",
  "wayrs-client-transport-virtgpu",

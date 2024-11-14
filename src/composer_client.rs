@@ -19,6 +19,7 @@ use android_hardware_graphics_composer3::aidl::android::hardware::graphics::comp
 use android_hardware_graphics_composer3::aidl::android::hardware::graphics::composer3::PresentFence::PresentFence;
 use android_hardware_graphics_composer3::aidl::android::hardware::graphics::composer3::ReleaseFences;
 use binder::ParcelFileDescriptor;
+use regex::Regex;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -61,11 +62,9 @@ use crate::bindings::{sw_sync_fence_create, sw_sync_timeline_create, sw_sync_tim
 
 #[derive(Debug)]
 pub enum HwcEvent {
-    CreateDisplay { display: i64 },
     PresentDisplay { display: i64 },
-    CreateLayer { display: i64, layer: i64 },
     DestroyLayer { display: i64, layer: i64 },
-    PresentLayer { display: i64, layer: i64 },
+    Update { display: i64, layer: i64 },
 }
 
 pub struct ComposerClient {
@@ -88,8 +87,8 @@ impl ComposerClientState {
         Self {
             display_config: vec![
                 /*invalid*/ 0,
-                /*width*/ 1080,
-                /*height*/ 720,
+                /*width*/ 500,
+                /*height*/ 500,
                 /*vsync_period*/ 1000 * 1000 * 1000 / 60,
                 /*dpi_x*/ 100,
                 /*dpi_y*/ 100,
@@ -100,14 +99,6 @@ impl ComposerClientState {
             layer_count: 0,
         }
     }
-}
-
-#[derive(Debug)]
-pub struct LayerUpdatePayload {
-    pub buffer: ClientBuffer,
-    pub display_frame: ClientRect,
-    pub source_crop: ClientFRect,
-    pub z: i32,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -173,7 +164,7 @@ impl From<&AidlBuffer> for ClientBuffer {
         };
 
         let fds = fds
-            .into_iter()
+            .iter()
             .map(|x| {
                 unsafe { BorrowedFd::borrow_raw((x).as_raw_fd()) }
                     .try_clone_to_owned()
@@ -184,12 +175,10 @@ impl From<&AidlBuffer> for ClientBuffer {
         Self {
             fds,
             ints: ints.clone(),
-            fence: value.fence.as_ref().and_then(|x| {
-                Some(unsafe {
-                    BorrowedFd::borrow_raw(x.as_raw_fd())
-                        .try_clone_to_owned()
-                        .unwrap()
-                })
+            fence: value.fence.as_ref().map(|x| unsafe {
+                BorrowedFd::borrow_raw(x.as_raw_fd())
+                    .try_clone_to_owned()
+                    .unwrap()
             }),
         }
     }
@@ -200,10 +189,7 @@ impl From<&ClientBuffer> for ClientBuffer {
         Self {
             fds: value.fds.iter().map(|x| x.try_clone().unwrap()).collect(),
             ints: value.ints.clone(),
-            fence: value
-                .fence
-                .as_ref()
-                .and_then(|x| Some(x.try_clone().unwrap())),
+            fence: value.fence.as_ref().map(|x| x.try_clone().unwrap()),
         }
     }
 }
@@ -212,6 +198,9 @@ impl From<&ClientBuffer> for ClientBuffer {
 pub struct ClientLayer {
     pub buffer_slot_count: i32,
     pub name: String,
+    pub app_name: String,
+    pub task_id: Option<u32>,
+    pub user_id: Option<u32>,
     pub layer: i64,
     pub slot: i32,
     pub cursor_position: Option<()>, //TODO
@@ -238,6 +227,7 @@ impl ClientLayer {
             buffer_slot_count,
             layer,
             buffers,
+            app_name: "vmdroid".into(),
             ..Default::default()
         }
     }
@@ -355,7 +345,7 @@ impl ComposerClient {
         }
 
         self.channel
-            .send(HwcEvent::PresentLayer {
+            .send(HwcEvent::Update {
                 display,
                 layer: command.layer,
             })
@@ -385,7 +375,7 @@ impl IComposerClientAsyncServer for ComposerClient {
     {
         "android.hardware.graphics.composer3.IComposerClient"
     }
-    async fn r#createLayer(&self, display: i64, buffer_slot_count: i32) -> binder::Result<i64> {
+    async fn r#createLayer(&self, _display: i64, buffer_slot_count: i32) -> binder::Result<i64> {
         let layer_id;
         {
             let mut state = self.state.lock().unwrap();
@@ -395,13 +385,6 @@ impl IComposerClientAsyncServer for ComposerClient {
                 .layers
                 .insert(layer_id, ClientLayer::new(buffer_slot_count, layer_id));
         }
-        self.channel
-            .send(HwcEvent::CreateLayer {
-                display,
-                layer: layer_id,
-            })
-            .await
-            .unwrap();
         println!("createLayer {}", layer_id);
         Ok(layer_id)
     }
@@ -598,10 +581,6 @@ impl IComposerClientAsyncServer for ComposerClient {
     ) -> binder::Result<()> {
         self.callback.lock().unwrap().replace(callback.clone());
         callback.onHotplug(1, true).unwrap();
-        self.channel
-            .send(HwcEvent::CreateDisplay { display: 1 })
-            .await
-            .unwrap();
         Ok(())
     }
     async fn r#setActiveConfig(&self, _arg_display: i64, _arg_config: i32) -> binder::Result<()> {
@@ -731,8 +710,45 @@ impl IComposerClientAsyncServer for ComposerClient {
     }
     async fn r#setLayerName(&self, display: i64, layer_id: i64, name: &str) -> binder::Result<()> {
         let mut state = self.state.lock().unwrap();
-        state.layers.get_mut(&layer_id).unwrap().name = name.into();
-        println!("setLayerName: {} {} {}", display, layer_id, name);
+        let layer = state.layers.get_mut(&layer_id).unwrap();
+
+        layer.name = name.into();
+
+        let task_id_pattern = Regex::new(r"Task=([0-9]+)").unwrap();
+
+        layer.task_id = task_id_pattern
+            .captures(name)
+            .and_then(|x| x.get(1).map(|y| y.as_str().parse::<u32>().unwrap()));
+
+        let user_id_pattern = Regex::new(r"User=([0-9]+)").unwrap();
+        layer.user_id = user_id_pattern
+            .captures(name)
+            .and_then(|x| x.get(1).map(|y| y.as_str().parse::<u32>().unwrap()));
+
+        let parts = name.split(|c: char| c == '/' || c == '#' || c == ' ' || c == '{' || c == '}');
+
+        let package_name_pattern =
+            Regex::new(r"^(?:[a-zA-Z]+(?:\d*[a-zA-Z_]*)*)(?:\.[a-zA-Z]+(?:\d*[a-zA-Z_]*)*)+$")
+                .unwrap();
+
+        for part in parts {
+            println!("{}", part);
+            if package_name_pattern.is_match(part) {
+                layer.app_name = part.into();
+                break;
+            }
+        }
+
+        if layer.app_name == "com.android.launcher3" {
+            layer.app_name = "vmdroid".into();
+            layer.task_id = None;
+            layer.user_id = None;
+        }
+
+        println!(
+            "setLayerName: {} {} {} {} {:?}",
+            display, layer_id, name, layer.app_name, layer.task_id,
+        );
         Ok(())
     }
 }

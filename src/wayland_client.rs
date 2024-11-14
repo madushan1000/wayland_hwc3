@@ -19,7 +19,7 @@ use wayrs_client::core::ObjectId;
 use wayrs_client::global::GlobalsExt;
 use wayrs_client::object::Proxy;
 use wayrs_client::protocol::{
-    wl_output, wl_subcompositor, WlBuffer, WlSubcompositor, WlSubsurface,
+    wl_output, wl_subcompositor, WlBuffer, WlSeat, WlSubcompositor, WlSubsurface
 };
 use wayrs_client::ClientTransport;
 use wayrs_client::{
@@ -40,9 +40,7 @@ use wayrs_protocols::{
 use wayrs_utils::dmabuf_feedback::{DmabufFeedback, DmabufFeedbackHandler};
 
 use crate::bindings::sw_sync_timeline_inc;
-use crate::composer_client::{
-    ClientBuffer, ClientRect, ComposerClientState, HwcEvent, LayerUpdatePayload,
-};
+use crate::composer_client::{ClientBuffer, ClientRect, ComposerClientState, HwcEvent};
 
 type WaylandChannel = VirtgpuChannel;
 
@@ -65,6 +63,7 @@ pub async fn start_wayland_client(
         .bind_with_cb(&mut conn, ..=4, xdg_wm_base_cb)
         .unwrap();
     let wp_viewporter: WpViewporter = globals.bind(&mut conn, 1).unwrap();
+    let wl_seat: WlSeat = globals.bind_with_cb(&mut conn, ..=7, wl_seat_cb).unwrap();
 
     let mut state = WaylandState {
         composer_client_state,
@@ -75,7 +74,8 @@ pub async fn start_wayland_client(
         wp_single_pixel_buffer_manager_v1,
         wp_viewporter,
         windows: HashMap::new(),
-        display_to_window: HashMap::new(),
+        layer_to_window: HashMap::new(),
+        task_to_window: HashMap::new(),
     };
 
     loop {
@@ -112,7 +112,8 @@ struct WaylandState {
     wp_single_pixel_buffer_manager_v1: WpSinglePixelBufferManagerV1,
     wp_viewporter: WpViewporter,
     windows: HashMap<u32, WaylandWindow>,
-    display_to_window: HashMap<i64, u32>,
+    layer_to_window: HashMap<i64, u32>,
+    task_to_window: HashMap<Option<u32>, u32>,
 }
 
 impl WaylandState {
@@ -123,48 +124,58 @@ impl WaylandState {
     ) {
         println!("{:?}", evt);
         match evt {
-            HwcEvent::CreateDisplay { display } => {
-                let window = WaylandWindow::new(
-                    conn,
-                    self.composer_client_state.clone(),
-                    self.wl_compositor,
-                    self.wl_subcompositor,
-                    self.xdg_wm_base,
-                    self.linux_dmabuf,
-                    self.wp_single_pixel_buffer_manager_v1,
-                    self.wp_viewporter,
-                    display,
-                );
-                let window_id = window.xdg_surface.id().as_u32();
-                self.display_to_window.insert(display, window_id);
-                self.windows.insert(window_id, window);
-            }
             HwcEvent::PresentDisplay { display } => {
-                let window_id = self.display_to_window.get(&display).unwrap();
-                let window = self.windows.get_mut(window_id).unwrap();
-                window.present_display(conn);
-            }
-            HwcEvent::CreateLayer { display, layer } => {
-                let window_id = self.display_to_window.get(&display).unwrap();
-                let window = self.windows.get_mut(window_id).unwrap();
-                window.create_layer(conn, layer);
+                self.windows
+                    .values_mut()
+                    .for_each(|x| x.present_display(conn));
             }
             HwcEvent::DestroyLayer { display, layer } => {
-                let window_id = self.display_to_window.get_mut(&display).unwrap();
-                let window = self.windows.get_mut(window_id).unwrap();
+                println!("layer_to_window: {:?}", self.layer_to_window);
+                let window_id = self.layer_to_window.remove(&layer).unwrap();
+                let window = self.windows.get_mut(&window_id).unwrap();
                 window.destory_layer(conn, layer);
             }
-            HwcEvent::PresentLayer { display, layer } => {
-                let window_id = self.display_to_window.get_mut(&display).unwrap();
-                let window = self.windows.get_mut(window_id).unwrap();
-                window
-                    .subsurfaces
-                    .get_mut(&layer)
-                    .unwrap()
-                    .present_layer(conn)
-                    .await;
+            HwcEvent::Update { display, layer } => {
+                self.update(conn, layer).await;
             }
         }
+    }
+    async fn update(&mut self, conn: &mut Connection<WaylandState, WaylandChannel>, layer_id: i64) {
+        let window;
+        {
+            let composer_state = self.composer_client_state.lock().unwrap();
+            let layer = match composer_state.layers.get(&layer_id) {
+                Some(l) => l,
+                None => return,
+            };
+
+
+            window = match self.task_to_window.get(&layer.task_id) {
+                Some(window_id) => self.windows.get_mut(window_id).unwrap(),
+                None => {
+                    let win = WaylandWindow::new(conn, self, &layer.app_name);
+                    let window_id = win.xdg_surface.id().as_u32();
+                    self.task_to_window.insert(layer.task_id, window_id);
+                    self.windows.insert(window_id, win);
+                    self.windows.get_mut(&window_id).unwrap()
+                }
+            };
+
+            if layer.user_id.is_some() {
+                window.user_id = layer.user_id;
+            }
+
+        }
+        let layer = match window.subsurfaces.get_mut(&layer_id) {
+            Some(l) => l,
+            None => {
+                window.create_layer(conn, layer_id);
+                self.layer_to_window
+                    .insert(layer_id, window.xdg_surface.id().as_u32());
+                window.subsurfaces.get_mut(&layer_id).unwrap()
+            }
+        };
+        layer.present_layer(conn).await;
     }
 }
 
@@ -172,6 +183,9 @@ fn xdg_wm_base_cb(ctx: EventCtx<WaylandState, XdgWmBase, WaylandChannel>) {
     if let xdg_wm_base::Event::Ping(serial) = ctx.event {
         ctx.proxy.pong(ctx.conn, serial);
     }
+}
+
+fn wl_seat_cb(ctx: EventCtx<WaylandState, WlSeat, WaylandChannel>) {
 }
 
 #[derive(Debug)]
@@ -188,22 +202,17 @@ pub struct WaylandWindow {
     buffer: WlBuffer,
     configured: bool,
     subsurfaces: HashMap<i64, WaylandSubSurface>,
+    user_id: Option<u32>,
 }
 
 impl WaylandWindow {
     fn new(
         conn: &mut Connection<WaylandState, WaylandChannel>,
-        composer_client_state: Arc<Mutex<ComposerClientState>>,
-        wl_compositor: WlCompositor,
-        wl_subcompositor: WlSubcompositor,
-        xdg_wm_base: XdgWmBase,
-        linux_dmabuf: ZwpLinuxDmabufV1,
-        wp_single_pixel_buffer_manager_v1: WpSinglePixelBufferManagerV1,
-        wp_viewporter: WpViewporter,
-        id: i64,
+        state: &WaylandState,
+        name: &String,
     ) -> Self {
-        let surface = wl_compositor.create_surface(conn);
-        let xdg_surface = xdg_wm_base.get_xdg_surface(conn, surface);
+        let surface = state.wl_compositor.create_surface(conn);
+        let xdg_surface = state.xdg_wm_base.get_xdg_surface(conn, surface);
         let xdg_toplevel = xdg_surface.get_toplevel(conn);
 
         // DMABUFs have origin at top-left corner, but OpenGL has origin at bottom-left. This
@@ -236,27 +245,29 @@ impl WaylandWindow {
             _ => (),
         });
 
-        xdg_toplevel.set_app_id(conn, wayrs_client::cstr!("vmdroid").into());
-        let id = format!("vmdroid-{id}");
-        xdg_toplevel.set_title(conn, CString::new(id).unwrap());
+        xdg_toplevel.set_app_id(conn, CString::new(name.clone()).unwrap());
+        xdg_toplevel.set_title(conn, CString::new(name.clone()).unwrap());
 
-        let buffer = wp_single_pixel_buffer_manager_v1.create_u32_rgba_buffer(conn, 0, 0, 0, 0);
+        let buffer = state
+            .wp_single_pixel_buffer_manager_v1
+            .create_u32_rgba_buffer(conn, 0, 0, 0, 0);
 
         surface.commit(conn);
 
         Self {
-            composer_client_state,
+            composer_client_state: state.composer_client_state.clone(),
             surface,
-            wl_compositor,
-            wl_subcompositor,
+            wl_compositor: state.wl_compositor,
+            wl_subcompositor: state.wl_subcompositor,
             xdg_surface,
             xdg_toplevel,
-            linux_dmabuf,
-            wp_viewporter,
+            linux_dmabuf: state.linux_dmabuf,
+            wp_viewporter: state.wp_viewporter,
             should_close: false,
             buffer,
             configured: false,
             subsurfaces: HashMap::new(),
+            user_id: None,
         }
     }
     fn create_layer(&mut self, conn: &mut Connection<WaylandState, WaylandChannel>, layer: i64) {
@@ -283,20 +294,26 @@ impl WaylandWindow {
         subsurface.surface.destroy(conn);
     }
 
-    fn get_layer(&mut self, id: i64) -> &mut WaylandSubSurface {
-        self.subsurfaces.get_mut(&id).unwrap()
-    }
-
     fn present_display(&mut self, conn: &mut Connection<WaylandState, WaylandChannel>) {
         if !self.configured {
             return;
         }
         self.surface.attach(conn, Some(self.buffer), 0, 0);
 
-        self
-            .subsurfaces
-            .values()
-            .for_each(|x| println!("{:?}", (x.z, x.subsurface, x.surface, &x.name, x.id, x.buffer.is_some())));
+        self.subsurfaces.values().for_each(|x| {
+            println!(
+                "window {:?} {:?}",
+                self.surface,
+                (
+                    x.z,
+                    x.subsurface,
+                    x.surface,
+                    &x.name,
+                    x.id,
+                    x.buffer.is_some()
+                )
+            )
+        });
         let mut zorders = self
             .subsurfaces
             .values()
@@ -318,17 +335,6 @@ impl WaylandWindow {
             .iter_mut()
             .for_each(|(_, x)| x.surface.commit(conn));
         self.surface.commit(conn);
-    }
-
-    fn get_parent_for_z(&self, z: i32) -> WlSurface {
-        let mut parent = self.surface;
-
-        for (_, surf) in self.subsurfaces.iter() {
-            if surf.z == z - 1 {
-                parent = surf.surface
-            }
-        }
-        parent
     }
 }
 
@@ -484,7 +490,7 @@ impl WaylandSubSurface {
         );
         let strech_width = display_frame.right - display_frame.left;
         let strech_height = display_frame.bottom - display_frame.top;
-        let strech_width  = if strech_width <= 0 {
+        let strech_width = if strech_width <= 0 {
             width as i32
         } else {
             strech_width

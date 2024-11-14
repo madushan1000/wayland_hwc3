@@ -1,0 +1,14 @@
+[package]
+name = "android_hardware_input"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-trait = "0.1.74"
+binder = { package = "binder_ndk", version = "0.2.0" }
+binder_tokio = "0.2.0"
+input_manager = { path = "../input_manager" }
+
+[patch.crates-io]
+binder_tokio = { path = "../rust-deps/binder_rs/binder_tokio"}
+binder_ndk = { path = "../rust-deps/binder_rs/binder"}

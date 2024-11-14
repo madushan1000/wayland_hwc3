@@ -1,5 +1,9 @@
+/*
+ * This file is auto-generated.  DO NOT MODIFY.
+ * Using: /home/mnishant/Dev/my/android/build-tools-main/android-VanillaIceCream/aidl aidl/android/hardware/common/Ashmem.aidl aidl/android/hardware/common/MappableFile.aidl aidl/android/hardware/common/NativeHandle.aidl --lang=rust -I aidl/ --stability=vintf --structured -o android_hardware_common/src/aidl
+ */
 #![forbid(unsafe_code)]
-#![rustfmt::skip]
+#![cfg_attr(rustfmt, rustfmt_skip)]
 #[derive(Debug)]
 pub struct r#NativeHandle {
   pub r#fds: Vec<binder::ParcelFileDescriptor>,
